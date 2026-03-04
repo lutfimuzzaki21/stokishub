@@ -1,0 +1,202 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPERADMIN
+  STOKIS
+  SUBSTOKIS
+  SALES
+  DRIVER
+  KONSUMEN
+  MEMBER
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  name       String
+  email      String   @unique
+  password   String
+  role       Role
+  parent_id  Int?     // For SubStokis parent Stokis, or Customer's Stokis
+  store_name String?
+  contact    String?
+  address    String?
+  price_level String?    @default("Harga Umum")
+  latitude   Float?     // Koordinat lokasi user untuk titik pengiriman
+  longitude  Float?     // Koordinat lokasi user untuk titik pengiriman
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  products      Product[]
+  purchases     Purchase[]
+  priceTiers    PriceTier[]
+  
+  stokisOrders  Order[] @relation("StokisOrders")
+  buyerOrders   Order[] @relation("BuyerOrders")
+  driverOrders  Order[] @relation("DriverOrders")
+  salesOrders   Order[] @relation("SalesOrders")
+  
+  userPriceTiers UserPriceTier[]
+  salesVisits    Visit[] @relation("SalesVisits")
+  commissionConfigs        CommissionConfig[]   @relation("StokisCommissionConfigs")
+  commissionCampaigns      CommissionCampaign[] @relation("StokisCampaigns")
+  salesCommissionConfigs   CommissionConfig[]   @relation("SalesCommissionConfigs")
+  salesCommissionCampaigns CommissionCampaign[] @relation("SalesCampaigns")
+}
+
+model Product {
+  id         Int      @id @default(autoincrement())
+  code       String
+  brand      String
+  name       String
+  image      String?
+  stock      Int      @default(0)
+  userId     Int      // Stokis ID
+  user       User     @relation(fields: [userId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  purchases  Purchase[]
+  priceTiers PriceTier[]
+  orderItems OrderItem[]
+  userPriceTiers UserPriceTier[]
+  commissionConfigs      CommissionConfig[]
+  commissionCampaignItems CommissionCampaignItem[]
+}
+
+model Purchase {
+  id         Int      @id @default(autoincrement())
+  price_buy  Float
+  quantity   Int
+  date       DateTime @default(now())
+  productId  Int
+  userId     Int      // Stokis ID
+
+  product    Product  @relation(fields: [productId], references: [id])
+  user       User     @relation(fields: [userId], references: [id])
+}
+
+model PriceTier {
+  id         Int      @id @default(autoincrement())
+  level_name String   // "Harga Substokis 1", "Harga Umum", etc.
+  price      Float
+  commission Float    // Fixed commission for Sales based on this tier
+  productId  Int
+  userId     Int      // Stokis ID
+
+  product    Product  @relation(fields: [productId], references: [id])
+  user       User     @relation(fields: [userId], references: [id])
+}
+
+model Order {
+  id            Int         @id @default(autoincrement())
+  invoice_id    String      @unique
+  date          DateTime    @default(now())
+  status        String      @default("PENDING") // PENDING, PROCESSING, SHIPPED, DELIVERED, CANCELLED
+  total_amount  Float       @default(0)
+  
+  stokisId      Int         // The stokis handling this order
+  buyerId       Int         // The substokis/member/konsumen buying
+  driverId      Int?        // The driver assigned
+  salesId       Int?        // The sales who created this order
+  
+  stokis        User        @relation("StokisOrders", fields: [stokisId], references: [id])
+  buyer         User        @relation("BuyerOrders", fields: [buyerId], references: [id])
+  driver        User?       @relation("DriverOrders", fields: [driverId], references: [id])
+  sales         User?       @relation("SalesOrders", fields: [salesId], references: [id])
+  
+  items         OrderItem[]
+}
+
+model OrderItem {
+  id          Int      @id @default(autoincrement())
+  orderId     Int
+  productId   Int
+  quantity    Int
+  price       Float
+  
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+}
+
+model Visit {
+  id        Int      @id @default(autoincrement())
+  salesId   Int
+  name      String   // Nama toko / calon pelanggan
+  address   String
+  lat       Float?
+  lng       Float?
+  notes     String?
+  status    String   @default("PENDING") // PENDING, INTERESTED, REJECTED, REGISTERED
+  createdAt DateTime @default(now())
+
+  sales     User     @relation("SalesVisits", fields: [salesId], references: [id])
+}
+
+model UserPriceTier {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  productId  Int
+  level_name String   // e.g "Harga Substokis 1", "Harga Umum", dsb
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+// ─── Commission System ───────────────────────────────────────────────────────
+
+model CommissionConfig {
+  id             Int      @id @default(autoincrement())
+  stokisId       Int
+  salesId        Int?     // null = default for all sales; set = override for specific sales person
+  productId      Int
+  isActive       Boolean  @default(true)
+  commissionType String   @default("CUMULATIVE") // CUMULATIVE | FIRST_PURCHASE
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  stokis    User    @relation("StokisCommissionConfigs", fields: [stokisId], references: [id])
+  salesUser User?   @relation("SalesCommissionConfigs", fields: [salesId], references: [id])
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([stokisId, salesId, productId])
+}
+
+model CommissionCampaign {
+  id                 Int      @id @default(autoincrement())
+  stokisId           Int
+  salesId            Int?     // null = applies to all sales; set = only for this sales person
+  name               String
+  description        String?
+  isActive           Boolean  @default(true)
+  combineWithDefault Boolean  @default(true)
+  startDate          DateTime?
+  endDate            DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  stokis    User                     @relation("StokisCampaigns", fields: [stokisId], references: [id])
+  salesUser User?                    @relation("SalesCampaigns", fields: [salesId], references: [id])
+  items     CommissionCampaignItem[]
+}
+
+model CommissionCampaignItem {
+  id          Int     @id @default(autoincrement())
+  campaignId  Int
+  productId   Int
+  amountType  String  @default("FLAT") // FLAT | PERCENTAGE
+  amount      Float
+
+  campaign CommissionCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product  Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, productId])
+}
