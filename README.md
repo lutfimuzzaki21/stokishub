@@ -211,6 +211,20 @@ pass1234
 ```
 Konsumen dapat mengubah password setelah login pertama melalui fitur edit profil.
 
+Default password semua user adalah:
+```
+stokis@stokishub.com
+substokis1@stokishub.com
+driver@stokishub.com
+sales@stokishub.com
+umum@stokishub.com
+member@stokishub.com
+
+All Password
+password123
+```
+Konsumen dapat mengubah password setelah login pertama melalui fitur edit profil.
+
 ---
 
 ## 📝 Lisensi
