@@ -36,6 +36,9 @@ export default function SalesRegisterConsumerScreen() {
     const [parentOptions, setParentOptions] = useState([]);
     const [selectedParentId, setSelectedParentId] = useState(user.parent_id || user.id);
     const [gettingLocation, setGettingLocation] = useState(false);
+    // Store map picker
+    const [storePickerVisible, setStorePickerVisible] = useState(false);
+    const [salesCoord, setSalesCoord] = useState(null); // { latitude, longitude }
     const [mapPickerVisible, setMapPickerVisible] = useState(false);
     const [mapPickerCoord, setMapPickerCoord] = useState(null); // { latitude, longitude }
     const [mapPickerRegion, setMapPickerRegion] = useState({
@@ -65,7 +68,7 @@ export default function SalesRegisterConsumerScreen() {
 
     const fetchConsumers = async () => {
         try {
-            const res = await axios.get(`${BASE_URL}/api/consumers?parentId=${user.parent_id || user.id}`, { timeout: 10000 });
+            const res = await axios.get(`${BASE_URL}/api/consumers?parentId=${user.parent_id || user.id}&salesId=${user.id}`, { timeout: 10000 });
             setConsumers(res.data);
         } catch (e) {
             Alert.alert('Gagal', 'Tidak bisa memuat data konsumen');
@@ -144,6 +147,31 @@ export default function SalesRegisterConsumerScreen() {
         setMapPickerVisible(false);
     };
 
+    // Distance helper (km, Haversine)
+    const calcDistance = (lat1, lon1, lat2, lon2) => {
+        if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+        const R = 6371;
+        const dLat = ((lat2 - lat1) * Math.PI) / 180;
+        const dLon = ((lon2 - lon1) * Math.PI) / 180;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
+    const openStorePicker = () => {
+        // Open modal immediately — no waiting for GPS
+        setStorePickerVisible(true);
+        // Fetch sales GPS in background for distance sorting
+        (async () => {
+            try {
+                const { status } = await Location.requestForegroundPermissionsAsync();
+                if (status === 'granted') {
+                    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low, timeout: 8000 });
+                    setSalesCoord({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+                }
+            } catch (_) {}
+        })();
+    };
+
     const submitConsumer = async () => {
         if (!form.name.trim() || !form.email.trim()) {
             Alert.alert('Lengkapi Data', 'Nama dan email wajib diisi');
@@ -164,6 +192,7 @@ export default function SalesRegisterConsumerScreen() {
                 role: form.role,
                 price_level: form.role === 'MEMBER' ? form.price_level : 'Harga Umum',
                 parentId: selectedParentId,
+                salesId: user.id,
                 latitude: form.latitude ? parseFloat(form.latitude) : null,
                 longitude: form.longitude ? parseFloat(form.longitude) : null,
             });
@@ -289,41 +318,31 @@ export default function SalesRegisterConsumerScreen() {
                 <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
                     <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
                         {/* Parent / Stokis Picker */}
-                        {parentOptions.length > 0 && (
-                            <>
-                                <View style={styles.parentLabelRow}>
-                                    <Building2 size={14} color={theme.colors.primaryLight} />
-                                    <Text style={[styles.formLabel, { marginTop: 0, marginBottom: 0 }]}>Daftarkan ke *</Text>
-                                </View>
-                                <View style={styles.parentOptions}>
-                                    {parentOptions.map(opt => {
-                                        const isSelected = selectedParentId === opt.id;
-                                        const isSubstokis = opt.role === 'SUBSTOKIS';
-                                        return (
-                                            <TouchableOpacity
-                                                key={opt.id}
-                                                style={[styles.parentOption, isSelected && styles.parentOptionSelected]}
-                                                onPress={() => setSelectedParentId(opt.id)}
-                                                activeOpacity={0.8}
-                                            >
-                                                <View style={[styles.parentOptionIcon, isSelected && { backgroundColor: 'rgba(99,102,241,0.2)' }]}>
-                                                    <Building2 size={15} color={isSelected ? theme.colors.primaryLight : theme.colors.muted} />
-                                                </View>
-                                                <View style={{ flex: 1, minWidth: 0 }}>
-                                                    <Text numberOfLines={1} style={[styles.parentOptionName, isSelected && { color: theme.colors.primaryLight }]}>{opt.name}</Text>
-                                                    <Text style={styles.parentOptionRole}>{isSubstokis ? 'Sub Stokis' : 'Stokis'}</Text>
-                                                </View>
-                                                {isSelected && (
-                                                    <View style={styles.parentOptionCheck}>
-                                                        <Check size={11} color="#fff" />
-                                                    </View>
-                                                )}
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                </View>
-                            </>
-                        )}
+                        {parentOptions.length > 0 && (() => {
+                            const sel = parentOptions.find(o => o.id === selectedParentId) || parentOptions[0];
+                            const isSubstokis = sel?.role === 'SUBSTOKIS';
+                            return (
+                                <>
+                                    <View style={styles.parentLabelRow}>
+                                        <Building2 size={14} color={theme.colors.primaryLight} />
+                                        <Text style={[styles.formLabel, { marginTop: 0, marginBottom: 0 }]}>Daftarkan ke *</Text>
+                                    </View>
+                                    <TouchableOpacity style={styles.storePickerBtn} onPress={openStorePicker} activeOpacity={0.8}>
+                                        <View style={[styles.storePickerBtnIcon, isSubstokis && { backgroundColor: 'rgba(16,185,129,0.15)' }]}>
+                                            <Building2 size={18} color={isSubstokis ? '#10b981' : theme.colors.primaryLight} />
+                                        </View>
+                                        <View style={{ flex: 1, minWidth: 0 }}>
+                                            <Text numberOfLines={1} style={styles.storePickerBtnName}>{sel?.name || '—'}</Text>
+                                            <Text style={[styles.storePickerBtnRole, isSubstokis && { color: '#10b981' }]}>{isSubstokis ? 'Sub Stokis' : 'Stokis'}</Text>
+                                        </View>
+                                        <View style={styles.storePickerBtnArrow}>
+                                            <MapPin size={14} color={theme.colors.primaryLight} />
+                                            <Text style={styles.storePickerBtnChangeTxt}>Pilih di Peta</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                </>
+                            );
+                        })()}
 
                         {/* Role Picker */}
                         <Text style={[styles.formLabel, { marginTop: 4 }]}>Tipe Pelanggan *</Text>
@@ -503,6 +522,108 @@ export default function SalesRegisterConsumerScreen() {
                 </KeyboardAvoidingView>
             )}
 
+            {/* Store Picker Map Modal */}
+            <Modal visible={storePickerVisible} animationType="slide" onRequestClose={() => setStorePickerVisible(false)}>
+                <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+                    {/* Header */}
+                    <View style={styles.mapPickerHeader}>
+                        <TouchableOpacity style={styles.mapPickerClose} onPress={() => setStorePickerVisible(false)}>
+                            <X size={20} color={theme.colors.text} />
+                        </TouchableOpacity>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.mapPickerTitle}>Pilih Lokasi Toko</Text>
+                            <Text style={styles.mapPickerSub}>Ketuk marker atau nama toko untuk memilih</Text>
+                        </View>
+                    </View>
+
+                    {/* Map — show all store markers */}
+                    {(() => {
+                        const storesWithCoord = parentOptions.filter(o => o.latitude && o.longitude);
+                        const stokis = parentOptions.find(o => o.role === 'STOKIS');
+                        const initRegion = storesWithCoord.length > 0
+                            ? { latitude: storesWithCoord[0].latitude, longitude: storesWithCoord[0].longitude, latitudeDelta: 0.08, longitudeDelta: 0.08 }
+                            : { latitude: -6.1751, longitude: 106.8272, latitudeDelta: 0.1, longitudeDelta: 0.1 };
+                        return (
+                            <MapView
+                                style={{ height: 320 }}
+                                provider={PROVIDER_DEFAULT}
+                                initialRegion={initRegion}
+                                showsUserLocation
+                            >
+                                {parentOptions.map(opt => {
+                                    if (!opt.latitude || !opt.longitude) return null;
+                                    const isSelected = opt.id === selectedParentId;
+                                    const isSubstokis = opt.role === 'SUBSTOKIS';
+                                    return (
+                                        <Marker
+                                            key={opt.id}
+                                            coordinate={{ latitude: opt.latitude, longitude: opt.longitude }}
+                                            title={opt.name}
+                                            description={isSubstokis ? 'Sub Stokis' : 'Stokis'}
+                                            pinColor={isSelected ? '#6366f1' : (isSubstokis ? '#10b981' : '#f59e0b')}
+                                            tracksViewChanges={false}
+                                            onPress={() => { setSelectedParentId(opt.id); setStorePickerVisible(false); }}
+                                        />
+                                    );
+                                })}
+                            </MapView>
+                        );
+                    })()}
+
+                    {/* Store list sorted by distance */}
+                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 10 }}>
+                        <Text style={[styles.formLabel, { marginTop: 4, marginBottom: 10 }]}>
+                            {salesCoord ? 'Toko Terdekat' : 'Daftar Toko'}
+                        </Text>
+                        {[...parentOptions]
+                            .map(o => ({ ...o, dist: calcDistance(salesCoord?.latitude, salesCoord?.longitude, o.latitude, o.longitude) }))
+                            .sort((a, b) => {
+                                if (a.dist === null && b.dist === null) return 0;
+                                if (a.dist === null) return 1;
+                                if (b.dist === null) return -1;
+                                return a.dist - b.dist;
+                            })
+                            .map(opt => {
+                                const isSelected = opt.id === selectedParentId;
+                                const isSubstokis = opt.role === 'SUBSTOKIS';
+                                const iconColor = isSelected ? '#fff' : (isSubstokis ? '#10b981' : '#f59e0b');
+                                const iconBg = isSelected
+                                    ? (isSubstokis ? '#10b981' : theme.colors.primaryLight)
+                                    : (isSubstokis ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)');
+                                return (
+                                    <TouchableOpacity
+                                        key={opt.id}
+                                        style={[styles.storeListItem, isSelected && styles.storeListItemSelected]}
+                                        onPress={() => { setSelectedParentId(opt.id); setStorePickerVisible(false); }}
+                                        activeOpacity={0.8}
+                                    >
+                                        <View style={[styles.storeListIcon, { backgroundColor: iconBg }]}>
+                                            <Building2 size={16} color={iconColor} />
+                                        </View>
+                                        <View style={{ flex: 1, minWidth: 0 }}>
+                                            <Text numberOfLines={1} style={[styles.storeListName, isSelected && { color: theme.colors.primaryLight }]}>{opt.name}</Text>
+                                            <Text style={[styles.storeListRole, isSubstokis && { color: '#10b981' }]}>{isSubstokis ? 'Sub Stokis' : 'Stokis'}</Text>
+                                        </View>
+                                        <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                                            {opt.dist !== null && (
+                                                <Text style={styles.storeListDist}>{opt.dist < 1 ? `${Math.round(opt.dist * 1000)} m` : `${opt.dist.toFixed(1)} km`}</Text>
+                                            )}
+                                            {!opt.latitude && (
+                                                <Text style={[styles.storeListDist, { color: theme.colors.muted }]}>No GPS</Text>
+                                            )}
+                                            {isSelected && (
+                                                <View style={styles.storeListCheck}>
+                                                    <Check size={10} color="#fff" />
+                                                </View>
+                                            )}
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                    </ScrollView>
+                </View>
+            </Modal>
+
             {/* Map Picker Modal */}
             <Modal visible={mapPickerVisible} animationType="slide" onRequestClose={() => setMapPickerVisible(false)}>
                 <View style={{ flex: 1, backgroundColor: '#000' }}>
@@ -671,28 +792,46 @@ const styles = StyleSheet.create({
     formLabel: { fontSize: 12, fontWeight: '700', color: theme.colors.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 16 },
     // Parent picker
     parentLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, marginBottom: 10 },
-    parentOptions: { gap: 8, marginBottom: 18 },
-    parentOption: {
+    // Store picker button (replaces old card list)
+    storePickerBtn: {
         flexDirection: 'row', alignItems: 'center', gap: 12,
         backgroundColor: theme.colors.card,
-        borderRadius: 12, padding: 12,
-        borderWidth: 1.5, borderColor: theme.colors.cardBorder,
+        borderRadius: 14, padding: 14,
+        borderWidth: 1.5, borderColor: theme.colors.primaryLight,
+        marginBottom: 18,
     },
-    parentOptionSelected: {
+    storePickerBtnIcon: {
+        width: 40, height: 40, borderRadius: 11,
+        backgroundColor: theme.colors.primaryGlow,
+        justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+    },
+    storePickerBtnName: { fontSize: 14, fontWeight: '800', color: theme.colors.text },
+    storePickerBtnRole: { fontSize: 11, color: theme.colors.primaryLight, fontWeight: '600', marginTop: 2 },
+    storePickerBtnArrow: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: theme.colors.primaryGlow, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)' },
+    storePickerBtnChangeTxt: { fontSize: 11, color: theme.colors.primaryLight, fontWeight: '700' },
+    // Store list in store picker modal
+    storeListItem: {
+        flexDirection: 'row', alignItems: 'center', gap: 12,
+        backgroundColor: theme.colors.card,
+        borderRadius: 14, padding: 14,
+        borderWidth: 1.5, borderColor: theme.colors.cardBorder,
+        marginBottom: 8,
+    },
+    storeListItemSelected: {
         borderColor: theme.colors.primaryLight,
         backgroundColor: 'rgba(99,102,241,0.07)',
     },
-    parentOptionIcon: {
-        width: 36, height: 36, borderRadius: 10,
-        backgroundColor: theme.colors.glass,
+    storeListIcon: {
+        width: 38, height: 38, borderRadius: 10,
         justifyContent: 'center', alignItems: 'center', flexShrink: 0,
     },
-    parentOptionName: { fontSize: 13, fontWeight: '800', color: theme.colors.text },
-    parentOptionRole: { fontSize: 10, color: theme.colors.muted, fontWeight: '600', marginTop: 2 },
-    parentOptionCheck: {
-        width: 22, height: 22, borderRadius: 11,
+    storeListName: { fontSize: 13, fontWeight: '800', color: theme.colors.text },
+    storeListRole: { fontSize: 11, color: theme.colors.muted, fontWeight: '600', marginTop: 2 },
+    storeListDist: { fontSize: 11, color: theme.colors.primaryLight, fontWeight: '700' },
+    storeListCheck: {
+        width: 20, height: 20, borderRadius: 10,
         backgroundColor: theme.colors.primaryLight,
-        justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+        justifyContent: 'center', alignItems: 'center',
     },
     roleCards: { flexDirection: 'row', gap: 10, marginBottom: 4 },
     roleCard: { flex: 1, backgroundColor: theme.colors.card, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: theme.colors.cardBorder, alignItems: 'center', gap: 6, position: 'relative' },

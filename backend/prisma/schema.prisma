@@ -30,6 +30,7 @@ model User {
   price_level String?    @default("Harga Umum")
   latitude   Float?     // Koordinat lokasi user untuk titik pengiriman
   longitude  Float?     // Koordinat lokasi user untuk titik pengiriman
+  sales_id   Int?       // Sales person yang mendaftarkan konsumen/member ini
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -43,11 +44,16 @@ model User {
   salesOrders   Order[] @relation("SalesOrders")
   
   userPriceTiers UserPriceTier[]
+  userPackagingTiers UserPackagingTier[]
   salesVisits    Visit[] @relation("SalesVisits")
+  registeredBySales     User?  @relation("RegisteredBySales", fields: [sales_id], references: [id])
+  registeredConsumers   User[] @relation("RegisteredBySales")
   commissionConfigs        CommissionConfig[]   @relation("StokisCommissionConfigs")
   commissionCampaigns      CommissionCampaign[] @relation("StokisCampaigns")
   salesCommissionConfigs   CommissionConfig[]   @relation("SalesCommissionConfigs")
   salesCommissionCampaigns CommissionCampaign[] @relation("SalesCampaigns")
+  konsinyasiAsStokis       KonsinyasiContract[] @relation("StokisKonsinyasi")
+  konsinyasiAsKonsumen     KonsinyasiContract[] @relation("KonsumenKonsinyasi")
 }
 
 model Product {
@@ -68,6 +74,9 @@ model Product {
   userPriceTiers UserPriceTier[]
   commissionConfigs      CommissionConfig[]
   commissionCampaignItems CommissionCampaignItem[]
+  packagings ProductPackaging[]
+  konsinyasiItems        KonsinyasiItem[]
+  konsinyasiScheduleItems KonsinyasiScheduleItem[]
 }
 
 model Purchase {
@@ -100,6 +109,7 @@ model Order {
   date          DateTime    @default(now())
   status        String      @default("PENDING") // PENDING, PROCESSING, SHIPPED, DELIVERED, CANCELLED
   total_amount  Float       @default(0)
+  isKonsinyasi  Boolean     @default(false)
   
   stokisId      Int         // The stokis handling this order
   buyerId       Int         // The substokis/member/konsumen buying
@@ -112,6 +122,7 @@ model Order {
   sales         User?       @relation("SalesOrders", fields: [salesId], references: [id])
   
   items         OrderItem[]
+  konsinyasiSchedule KonsinyasiSchedule?
 }
 
 model OrderItem {
@@ -120,9 +131,40 @@ model OrderItem {
   productId   Int
   quantity    Int
   price       Float
+  packagingId   Int?     // null = satuan unit biasa
+  packagingName String?  // snapshot nama kemasan saat order dibuat (e.g. "Dus", "Karton")
+  unitQty       Int?     @default(1) // snapshot unitQty packaging saat order dibuat
   
-  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [productId], references: [id])
+  order       Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product              @relation(fields: [productId], references: [id])
+  packaging   ProductPackaging?    @relation(fields: [packagingId], references: [id], onDelete: SetNull)
+}
+
+model ProductPackaging {
+  id         Int      @id @default(autoincrement())
+  productId  Int
+  name       String   // "Dus", "Karton", "Lusin", dll
+  unitQty    Int      // jumlah unit dalam 1 packaging ini
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  product    Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceTiers PackagingPriceTier[]
+  orderItems OrderItem[]
+  userPackagingTiers UserPackagingTier[]
+  commissionConfigs  CommissionConfig[]
+  konsinyasiItems         KonsinyasiItem[]
+  konsinyasiScheduleItems KonsinyasiScheduleItem[]
+}
+
+model PackagingPriceTier {
+  id           Int     @id @default(autoincrement())
+  packagingId  Int
+  level_name   String  // sama dengan nama tier produk: "Harga Substokis", "Harga Umum", dll
+  price        Float
+  commission   Float   @default(0)
+
+  packaging    ProductPackaging @relation(fields: [packagingId], references: [id], onDelete: Cascade)
 }
 
 model Visit {
@@ -151,6 +193,18 @@ model UserPriceTier {
   @@unique([userId, productId])
 }
 
+model UserPackagingTier {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  packagingId Int
+  level_name  String
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packaging ProductPackaging @relation(fields: [packagingId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, packagingId])
+}
+
 // ─── Commission System ───────────────────────────────────────────────────────
 
 model CommissionConfig {
@@ -158,16 +212,18 @@ model CommissionConfig {
   stokisId       Int
   salesId        Int?     // null = default for all sales; set = override for specific sales person
   productId      Int
+  packagingId    Int?     // null = unit config; set = per-kemasan config
   isActive       Boolean  @default(true)
   commissionType String   @default("CUMULATIVE") // CUMULATIVE | FIRST_PURCHASE
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  stokis    User    @relation("StokisCommissionConfigs", fields: [stokisId], references: [id])
-  salesUser User?   @relation("SalesCommissionConfigs", fields: [salesId], references: [id])
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stokis    User             @relation("StokisCommissionConfigs", fields: [stokisId], references: [id])
+  salesUser User?            @relation("SalesCommissionConfigs", fields: [salesId], references: [id])
+  product   Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  packaging ProductPackaging? @relation(fields: [packagingId], references: [id], onDelete: Cascade)
 
-  @@index([stokisId, salesId, productId])
+  @@index([stokisId, salesId, productId, packagingId])
 }
 
 model CommissionCampaign {
@@ -199,4 +255,78 @@ model CommissionCampaignItem {
   product  Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([campaignId, productId])
+}
+
+// ─── Konsinyasi (Consignment) System ─────────────────────────────────────────
+
+model KonsinyasiContract {
+  id            Int      @id @default(autoincrement())
+  stokisId      Int
+  konsumenId    Int      // ID user KONSUMEN yang menerima titipan
+  contractNo    String   @unique // Nomor kontrak, e.g. KNS-2026-0001
+  status        String   @default("DRAFT") // DRAFT | ACTIVE | PAUSED | TERMINATED
+  billingCycle  String   @default("MONTHLY") // WEEKLY | MONTHLY
+  startDate     DateTime?
+  endDate       DateTime?
+  notes         String?  @db.Text
+
+  // KYC / data diri pemilik toko
+  ownerName     String
+  storeName     String
+  storeAddress  String
+  storePhone    String?
+  idCardNo      String?  // NIK
+  npwpNo        String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  stokis        User     @relation("StokisKonsinyasi",   fields: [stokisId],   references: [id])
+  konsumen      User     @relation("KonsumenKonsinyasi", fields: [konsumenId], references: [id])
+
+  items         KonsinyasiItem[]
+  schedules     KonsinyasiSchedule[]
+}
+
+model KonsinyasiItem {
+  id            Int     @id @default(autoincrement())
+  contractId    Int
+  productId     Int
+  packagingId   Int?    // null = satuan unit
+  priceKonsinyasi Float  // Harga khusus titipan (beda dari harga jual biasa)
+  maxQtyPerDelivery Int @default(0) // Batas qty max per pengiriman (0 = bebas)
+
+  contract      KonsinyasiContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  product       Product            @relation(fields: [productId],  references: [id])
+  packaging     ProductPackaging?  @relation(fields: [packagingId], references: [id], onDelete: SetNull)
+
+  @@unique([contractId, productId, packagingId])
+}
+
+model KonsinyasiSchedule {
+  id            Int      @id @default(autoincrement())
+  contractId    Int
+  deliveryDate  DateTime
+  status        String   @default("SCHEDULED") // SCHEDULED | DISPATCHED | DELIVERED | CANCELLED
+  notes         String?
+  orderId       Int?     @unique  // Order yang dibuat otomatis dari jadwal ini
+
+  contract      KonsinyasiContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  order         Order?             @relation(fields: [orderId],    references: [id], onDelete: SetNull)
+
+  items         KonsinyasiScheduleItem[]
+
+  createdAt     DateTime @default(now())
+}
+
+model KonsinyasiScheduleItem {
+  id           Int    @id @default(autoincrement())
+  scheduleId   Int
+  productId    Int
+  packagingId  Int?
+  quantity     Int
+
+  schedule     KonsinyasiSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  product      Product            @relation(fields: [productId],  references: [id])
+  packaging    ProductPackaging?  @relation(fields: [packagingId], references: [id], onDelete: SetNull)
 }

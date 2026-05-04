@@ -108,6 +108,7 @@ const DashboardStokis = () => {
     const [commProducts, setCommProducts] = useState([]);
     const [commCampaigns, setCommCampaigns] = useState([]);
     const [commLoading, setCommLoading] = useState(false);
+    const [salesCommissionMap, setSalesCommissionMap] = useState({}); // { [salesId]: grandTotalCommission }
     const [commTab, setCommTab] = useState('default');
     const [showCampaignModal, setShowCampaignModal] = useState(false);
     const [editingCampaign, setEditingCampaign] = useState(null);
@@ -115,6 +116,10 @@ const DashboardStokis = () => {
     const [commSalesTeam, setCommSalesTeam] = useState([]);
     const [selectedSalesId, setSelectedSalesId] = useState(null);
     const [pendingConfigs, setPendingConfigs] = useState({});
+    const [salesReportId, setSalesReportId] = useState(null);
+    const [salesReportData, setSalesReportData] = useState({ orders: [], consumers: [], grandTotalCommission: 0 });
+    const [salesReportLoading, setSalesReportLoading] = useState(false);
+    const [salesConsumerMap, setSalesConsumerMap] = useState({});
 
     // States untuk Modal Tambah Produk Dynamic
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -123,6 +128,7 @@ const DashboardStokis = () => {
     const [formTiers, setFormTiers] = useState([
         { level_name: 'Harga Area 1', price: '', commission: '' }
     ]);
+    const [formPackagings, setFormPackagings] = useState([]);
 
     // States untuk Modal Restock
     const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
@@ -143,6 +149,7 @@ const DashboardStokis = () => {
     const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
     const [pricingTargetUser, setPricingTargetUser] = useState(null);
     const [pricingOverrides, setPricingOverrides] = useState([]); // [{productId, level_name}]
+    const [packagingOverrides, setPackagingOverrides] = useState([]); // [{packagingId, level_name}]
 
     const [profile, setProfile] = useState({ name: '', store_name: '', address: '', email: '' });
     const [loadingProfile, setLoadingProfile] = useState(false);
@@ -151,6 +158,23 @@ const DashboardStokis = () => {
     const [isEditProfileModalOpen, setIsEditProfileModalOpen] = useState(false);
     const [formEditProfile, setFormEditProfile] = useState({ name: '', email: '', store_name: '', contact: '', address: '', latitude: '', longitude: '' });
     const [gettingLocation, setGettingLocation] = useState(false);
+
+    // Konsinyasi States
+    const [konsinyasiList, setKonsinyasiList] = useState([]);
+    const [konsinyasiLoading, setKonsinyasiLoading] = useState(false);
+    const [showKonsinyasiModal, setShowKonsinyasiModal] = useState(false);
+    const [editingKonsinyasi, setEditingKonsinyasi] = useState(null);
+    const [konsinyasiDetailId, setKonsinyasiDetailId] = useState(null);
+    const [showScheduleModal, setShowScheduleModal] = useState(false);
+    const [scheduleContractId, setScheduleContractId] = useState(null);
+    const [konsumenList, setKonsumenList] = useState([]);
+    const [kForm, setKForm] = useState({
+        konsumenId: '', ownerName: '', storeName: '', storeAddress: '', storePhone: '',
+        idCardNo: '', npwpNo: '', billingCycle: 'MONTHLY', startDate: '', endDate: '', notes: '',
+        items: []
+    });
+    const [scheduleForm, setScheduleForm] = useState({ deliveryDate: '', notes: '', items: [] });
+    const [deliveryRows, setDeliveryRows] = useState([]); // [ { id, deliveryDate, contractId, productId, packagingId, quantity } ]
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -188,6 +212,20 @@ const DashboardStokis = () => {
         try {
             const res = await axios.get(`http://localhost:5000/api/team?parentId=${userId}`);
             setTeam(res.data);
+            // Fetch komisi bulan ini untuk setiap Sales member
+            const salesMembers = res.data.filter(m => m.role === 'SALES');
+            if (salesMembers.length > 0) {
+                const commResults = await Promise.all(
+                    salesMembers.map(s =>
+                        axios.get(`http://localhost:5000/api/commissions?salesId=${s.id}`)
+                            .then(r => ({ id: s.id, total: r.data.grandTotalCommission || 0 }))
+                            .catch(() => ({ id: s.id, total: 0 }))
+                    )
+                );
+                const map = {};
+                commResults.forEach(({ id, total }) => { map[id] = total; });
+                setSalesCommissionMap(map);
+            }
         } catch (error) {
             console.error('Gagal menarik data tim', error);
         } finally {
@@ -228,6 +266,149 @@ const DashboardStokis = () => {
         }
     };
 
+    const fetchKonsinyasi = async () => {
+        setKonsinyasiLoading(true);
+        try {
+            const [contractRes, konsumenRes] = await Promise.all([
+                axios.get(`http://localhost:5000/api/konsinyasi?stokisId=${userId}`),
+                axios.get(`http://localhost:5000/api/consumers?parentId=${userId}`),
+            ]);
+            setKonsinyasiList(contractRes.data);
+            setKonsumenList(konsumenRes.data || []);
+        } catch (err) {
+            console.error('Gagal memuat konsinyasi', err);
+        } finally {
+            setKonsinyasiLoading(false);
+        }
+    };
+
+    const openNewKonsinyasi = () => {
+        setEditingKonsinyasi(null);
+        setKForm({ konsumenId: '', ownerName: '', storeName: '', storeAddress: '', storePhone: '', idCardNo: '', npwpNo: '', billingCycle: 'MONTHLY', startDate: '', endDate: '', notes: '', items: [] });
+        setShowKonsinyasiModal(true);
+    };
+
+    const openEditKonsinyasi = (c) => {
+        setEditingKonsinyasi(c);
+        setKForm({
+            konsumenId: String(c.konsumenId), ownerName: c.ownerName, storeName: c.storeName,
+            storeAddress: c.storeAddress, storePhone: c.storePhone || '', idCardNo: c.idCardNo || '',
+            npwpNo: c.npwpNo || '', billingCycle: c.billingCycle, startDate: c.startDate ? c.startDate.slice(0,10) : '',
+            endDate: c.endDate ? c.endDate.slice(0,10) : '', notes: c.notes || '',
+            items: c.items.map(it => ({ productId: String(it.productId), packagingId: it.packagingId ? String(it.packagingId) : '', priceKonsinyasi: String(it.priceKonsinyasi), maxQtyPerDelivery: String(it.maxQtyPerDelivery || 0) }))
+        });
+        setShowKonsinyasiModal(true);
+    };
+
+    const saveKonsinyasi = async () => {
+        if (!kForm.konsumenId || !kForm.ownerName || !kForm.storeName || !kForm.storeAddress) {
+            MySwal.fire({ icon: 'warning', title: 'Lengkapi data KYC wajib: Konsumen, Nama Pemilik, Nama Toko, Alamat' }); return;
+        }
+        if (kForm.items.length === 0) {
+            MySwal.fire({ icon: 'warning', title: 'Tambahkan minimal 1 produk konsinyasi' }); return;
+        }
+        try {
+            const payload = { ...kForm, stokisId: userId };
+            if (editingKonsinyasi) {
+                await axios.put(`http://localhost:5000/api/konsinyasi/${editingKonsinyasi.id}`, payload);
+            } else {
+                await axios.post('http://localhost:5000/api/konsinyasi', payload);
+            }
+            setShowKonsinyasiModal(false);
+            fetchKonsinyasi();
+            MySwal.fire({ icon: 'success', title: editingKonsinyasi ? 'Kontrak diperbarui!' : 'Kontrak dibuat!', timer: 1800, showConfirmButton: false });
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal', text: err.response?.data?.message || err.message });
+        }
+    };
+
+    // Fetch default konsinyasi price from UserPriceTier & UserPackagingTier
+    const fetchDefaultKonsinyasiPrice = async (productId, packagingId, konsumenId) => {
+        try {
+            console.log('[DEBUG FRONTEND] Fetching default price:', { productId, packagingId, konsumenId });
+            
+            const params = new URLSearchParams({
+                productId: productId,
+                konsumenId: konsumenId,
+                ...(packagingId && { packagingId: packagingId })
+            });
+            const res = await axios.get(`http://localhost:5000/api/konsinyasi/default-price?${params}`);
+            console.log('[DEBUG FRONTEND] Response:', res.data);
+            return res.data.defaultPrice || 0;
+        } catch (err) {
+            console.error('[ERROR FRONTEND] Error fetching default konsinyasi price:', err.response?.data || err.message);
+            return 0;
+        }
+    };
+
+    const deleteKonsinyasi = async (id) => {
+        const r = await MySwal.fire({ title: 'Hapus kontrak?', text: 'Hanya kontrak DRAFT yang bisa dihapus.', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'Hapus', cancelButtonText: 'Batal' });
+        if (!r.isConfirmed) return;
+        try {
+            await axios.delete(`http://localhost:5000/api/konsinyasi/${id}`);
+            fetchKonsinyasi();
+            if (konsinyasiDetailId === id) setKonsinyasiDetailId(null);
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal', text: err.response?.data?.message || err.message });
+        }
+    };
+
+    const updateKonsinyasiStatus = async (id, status) => {
+        try {
+            await axios.patch(`http://localhost:5000/api/konsinyasi/${id}/status`, { status });
+            fetchKonsinyasi();
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal ubah status', text: err.response?.data?.message || err.message });
+        }
+    };
+
+    const openScheduleModal = (contractId) => {
+        setScheduleContractId(contractId);
+        const contract = konsinyasiList.find(c => c.id === contractId);
+        const defaultItems = contract ? contract.items.map(it => ({ productId: String(it.productId), packagingId: it.packagingId ? String(it.packagingId) : '', quantity: '' })) : [];
+        setScheduleForm({ deliveryDate: '', notes: '', items: defaultItems });
+        setShowScheduleModal(true);
+    };
+
+    const saveSchedule = async () => {
+        if (!scheduleForm.deliveryDate) { MySwal.fire({ icon: 'warning', title: 'Pilih tanggal pengiriman' }); return; }
+        const validItems = scheduleForm.items.filter(it => it.quantity && parseInt(it.quantity) > 0);
+        if (validItems.length === 0) { MySwal.fire({ icon: 'warning', title: 'Isi qty minimal 1 produk' }); return; }
+        try {
+            await axios.post(`http://localhost:5000/api/konsinyasi/${scheduleContractId}/schedules`, {
+                deliveryDate: scheduleForm.deliveryDate,
+                notes: scheduleForm.notes,
+                items: validItems.map(it => ({ productId: parseInt(it.productId), packagingId: it.packagingId ? parseInt(it.packagingId) : null, quantity: parseInt(it.quantity) }))
+            });
+            setShowScheduleModal(false);
+            fetchKonsinyasi();
+            MySwal.fire({ icon: 'success', title: 'Jadwal ditambahkan!', text: 'Pesanan konsinyasi otomatis masuk ke Distribusi dan Pesanan Konsumen.', timer: 2500, showConfirmButton: false });
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal', text: err.response?.data?.message || err.message });
+        }
+    };
+
+    const deleteSchedule = async (scheduleId) => {
+        const r = await MySwal.fire({ title: 'Hapus jadwal?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'Hapus', cancelButtonText: 'Batal' });
+        if (!r.isConfirmed) return;
+        try {
+            await axios.delete(`http://localhost:5000/api/konsinyasi/schedules/${scheduleId}`);
+            fetchKonsinyasi();
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal', text: err.response?.data?.message || err.message });
+        }
+    };
+
+    const triggerFirstDelivery = async (contractId) => {
+        try {
+            await axios.post(`http://localhost:5000/api/konsinyasi/${contractId}/trigger-first-delivery`);
+            MySwal.fire({ icon: 'success', title: 'Berhasil', text: 'Pengiriman pertama berhasil dibuat dan masuk ke Distribusi.' });
+            fetchKonsinyasi();
+        } catch (err) {
+            MySwal.fire({ icon: 'error', title: 'Gagal', text: err.response?.data?.message || err.message });
+        }
+    };
+
     const fetchCommissionData = async (salesIdParam) => {
         setCommLoading(true);
         const sid = salesIdParam !== undefined ? salesIdParam : selectedSalesId;
@@ -241,12 +422,36 @@ const DashboardStokis = () => {
             setCommProducts(prodRes.data);
             const pc = {};
             prodRes.data.forEach(p => {
+                // Unit config (packagingId = null)
                 const cfg = p.commissionConfigs && p.commissionConfigs[0];
-                pc[p.id] = { isActive: cfg ? cfg.isActive : false, commissionType: cfg ? cfg.commissionType : 'CUMULATIVE' };
+                pc[p.id] = {
+                    isActive: cfg ? cfg.isActive : false,
+                    commissionType: cfg ? cfg.commissionType : 'CUMULATIVE',
+                    packagings: {},
+                };
+                // Per-packaging configs
+                (p.packagings || []).forEach(pkg => {
+                    const pkgCfg = pkg.commissionConfigs && pkg.commissionConfigs[0];
+                    pc[p.id].packagings[pkg.id] = {
+                        isActive: pkgCfg ? pkgCfg.isActive : false,
+                        commissionType: pkgCfg ? pkgCfg.commissionType : 'CUMULATIVE',
+                    };
+                });
             });
             setPendingConfigs(pc);
             setCommCampaigns(campRes.data);
-            setCommSalesTeam((teamRes.data || []).filter(m => m.role === 'SALES'));
+            const salesList = (teamRes.data || []).filter(m => m.role === 'SALES');
+            setCommSalesTeam(salesList);
+            if (salesList.length > 0) {
+                const counts = await Promise.all(salesList.map(s =>
+                    axios.get(`http://localhost:5000/api/consumers?salesId=${s.id}`)
+                        .then(r => ({ id: s.id, count: r.data.length }))
+                        .catch(() => ({ id: s.id, count: 0 }))
+                ));
+                const cmap = {};
+                counts.forEach(({ id, count }) => { cmap[id] = count; });
+                setSalesConsumerMap(cmap);
+            }
         } catch (err) {
             console.error('Gagal memuat data komisi', err);
         } finally {
@@ -254,10 +459,38 @@ const DashboardStokis = () => {
         }
     };
 
+    const fetchSalesReport = async (sid) => {
+        if (salesReportId === sid) { setSalesReportId(null); return; }
+        setSalesReportId(sid);
+        setSalesReportLoading(true);
+        try {
+            const [commRes, consRes] = await Promise.all([
+                axios.get(`http://localhost:5000/api/commissions?salesId=${sid}`),
+                axios.get(`http://localhost:5000/api/consumers?salesId=${sid}`),
+            ]);
+            setSalesReportData({
+                orders: commRes.data.orders || [],
+                consumers: consRes.data || [],
+                grandTotalCommission: commRes.data.grandTotalCommission || 0,
+            });
+        } catch (err) {
+            console.error('Gagal memuat laporan sales', err);
+            setSalesReportData({ orders: [], consumers: [], grandTotalCommission: 0 });
+        } finally {
+            setSalesReportLoading(false);
+        }
+    };
+
     const saveCommissionConfigs = async () => {
-        const configs = Object.entries(pendingConfigs).map(([productId, v]) => ({
-            productId: parseInt(productId), isActive: v.isActive, commissionType: v.commissionType
-        }));
+        const configs = [];
+        Object.entries(pendingConfigs).forEach(([productId, v]) => {
+            // Unit row
+            configs.push({ productId: parseInt(productId), packagingId: null, isActive: v.isActive, commissionType: v.commissionType });
+            // Packaging rows
+            Object.entries(v.packagings || {}).forEach(([packagingId, pv]) => {
+                configs.push({ productId: parseInt(productId), packagingId: parseInt(packagingId), isActive: pv.isActive, commissionType: pv.commissionType });
+            });
+        });
         try {
             await axios.post('http://localhost:5000/api/commission-configs/save', { stokisId: userId, salesId: selectedSalesId, configs });
             MySwal.fire({ icon: 'success', title: 'Tersimpan!', text: 'Konfigurasi komisi default berhasil disimpan.', timer: 1800, showConfirmButton: false });
@@ -357,6 +590,8 @@ const DashboardStokis = () => {
             fetchVisitMarkers();
         } else if (activeTab === 'Komisi Sales') {
             fetchCommissionData();
+        } else if (activeTab === 'Daftar Konsinyasi') {
+            fetchKonsinyasi();
         } else if (activeTab === 'Pengaturan') {
             fetchProfile();
         }
@@ -424,6 +659,7 @@ const DashboardStokis = () => {
         setEditingProductId(null);
         setFormProduct({ name: '', stock: '' });
         setFormTiers([{ level_name: 'Harga Area 1', price: '', commission: '' }]);
+        setFormPackagings([]);
         setIsAddModalOpen(true);
     };
 
@@ -442,21 +678,74 @@ const DashboardStokis = () => {
             setFormTiers([{ level_name: 'Harga Area 1', price: '', commission: '' }]);
         }
 
+        setFormPackagings(product.packagings ? product.packagings.map(pkg => ({
+            name: pkg.name,
+            unitQty: pkg.unitQty,
+            isDefault: pkg.isDefault,
+            priceTiers: pkg.priceTiers.map(t => ({ level_name: t.level_name, price: t.price, commission: t.commission })),
+        })) : []);
+
         setIsAddModalOpen(true);
     };
 
     const handleAddTierRow = () => {
-        setFormTiers([...formTiers, { level_name: '', price: '', commission: '' }]);
+        const newTier = { level_name: '', price: '', commission: '' };
+        setFormTiers(prev => [...prev, newTier]);
+        // Tambahkan baris tier baru ke setiap kemasan yang sudah ada
+        setFormPackagings(prev => prev.map(pkg => ({
+            ...pkg,
+            priceTiers: [...pkg.priceTiers, { level_name: '', price: '', commission: '' }],
+        })));
     };
 
     const handleRemoveTierRow = (index) => {
-        setFormTiers(formTiers.filter((_, i) => i !== index));
+        setFormTiers(prev => prev.filter((_, i) => i !== index));
+        // Hapus baris tier yang sama dari setiap kemasan
+        setFormPackagings(prev => prev.map(pkg => ({
+            ...pkg,
+            priceTiers: pkg.priceTiers.filter((_, i) => i !== index),
+        })));
     };
 
     const handleTierChange = (index, field, value) => {
         const updatedTiers = [...formTiers];
         updatedTiers[index][field] = value;
         setFormTiers(updatedTiers);
+        // Jika nama level diubah, sinkronkan ke semua kemasan agar tetap konsisten
+        if (field === 'level_name') {
+            setFormPackagings(prev => prev.map(pkg => ({
+                ...pkg,
+                priceTiers: pkg.priceTiers.map((pt, i) =>
+                    i === index ? { ...pt, level_name: value } : pt
+                ),
+            })));
+        }
+    };
+
+    const addPackaging = () => {
+        setFormPackagings(prev => [...prev, {
+            name: 'Dus',
+            unitQty: 12,
+            isDefault: false,
+            priceTiers: formTiers.filter(t => t.level_name).map(t => ({ level_name: t.level_name, price: '', commission: '' })),
+        }]);
+    };
+
+    const removePackaging = (index) => {
+        setFormPackagings(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const updatePackaging = (index, field, value) => {
+        setFormPackagings(prev => prev.map((pkg, i) => i === index ? { ...pkg, [field]: value } : pkg));
+    };
+
+    const updatePackagingTier = (pkgIndex, tierIndex, field, value) => {
+        setFormPackagings(prev => prev.map((pkg, i) => {
+            if (i !== pkgIndex) return pkg;
+            const newTiers = [...pkg.priceTiers];
+            newTiers[tierIndex] = { ...newTiers[tierIndex], [field]: value };
+            return { ...pkg, priceTiers: newTiers };
+        }));
     };
 
     const submitProduct = async () => {
@@ -472,24 +761,38 @@ const DashboardStokis = () => {
                 priceTiers: formTiers.filter(t => t.level_name) // Hanya masukkan tier yg dinamai
             };
 
+            let prodId;
             if (editingProductId) {
                 await axios.put(`http://localhost:5000/api/products/${editingProductId}`, payload);
+                prodId = editingProductId;
                 MySwal.fire({
                     icon: 'success', title: 'Berhasil!', text: 'Produk SKU beserta Logic Multi-Area-nya berhasil diperbarui.',
                     background: 'var(--bg-card)', color: 'var(--text-main)', timer: 2500, showConfirmButton: false
                 });
             } else {
-                await axios.post('http://localhost:5000/api/products', payload);
+                const res = await axios.post('http://localhost:5000/api/products', payload);
+                prodId = res.data.id;
                 MySwal.fire({
                     icon: 'success', title: 'Berhasil!', text: 'Produk SKU beserta Logic Multi-Area-nya ditambahkan ke database.',
                     background: 'var(--bg-card)', color: 'var(--text-main)', timer: 2500, showConfirmButton: false
                 });
             }
 
+            // Save packagings (bulk replace)
+            await axios.post(`http://localhost:5000/api/products/${prodId}/packagings/bulk`, {
+                packagings: formPackagings.map(pkg => ({
+                    name: pkg.name,
+                    unitQty: parseInt(pkg.unitQty) || 1,
+                    isDefault: pkg.isDefault,
+                    priceTiers: pkg.priceTiers.filter(t => t.level_name),
+                })),
+            });
+
             setIsAddModalOpen(false);
             setEditingProductId(null);
             setFormProduct({ name: '', stock: '' });
             setFormTiers([{ level_name: 'Harga Area 1', price: '', commission: '' }]);
+            setFormPackagings([]);
             fetchProducts();
         } catch (err) {
             MySwal.fire({ icon: 'error', title: 'Gagal', text: err.message, background: 'var(--bg-card)' });
@@ -689,10 +992,12 @@ const DashboardStokis = () => {
         // fetch existing overrides
         try {
             const res = await axios.get(`http://localhost:5000/api/team/${user.id}/pricing`);
-            setPricingOverrides(res.data);
+            setPricingOverrides(res.data.unitOverrides || []);
+            setPackagingOverrides(res.data.packagingOverrides || []);
         } catch (error) {
             console.error(error);
             setPricingOverrides([]);
+            setPackagingOverrides([]);
         }
     };
 
@@ -707,10 +1012,22 @@ const DashboardStokis = () => {
         });
     };
 
+    const handlePackagingTierChange = (packagingId, level_name) => {
+        setPackagingOverrides(prev => {
+            const existing = prev.find(p => p.packagingId === packagingId);
+            if (existing) {
+                return prev.map(p => p.packagingId === packagingId ? { ...p, level_name } : p);
+            } else {
+                return [...prev, { packagingId, level_name }];
+            }
+        });
+    };
+
     const savePricingOverrides = async () => {
         try {
             await axios.post(`http://localhost:5000/api/team/${pricingTargetUser.id}/pricing`, {
-                pricingOverrides: pricingOverrides.filter(p => p.level_name)
+                pricingOverrides: pricingOverrides.filter(p => p.level_name),
+                packagingOverrides: packagingOverrides.filter(p => p.level_name),
             });
             MySwal.fire({
                 toast: true, position: 'top-end', icon: 'success', title: `Harga spesifik ${pricingTargetUser.name} tersimpan!`,
@@ -825,6 +1142,8 @@ const DashboardStokis = () => {
                 { name: 'Manajemen Tim', icon: <Users size={18} /> },
                 { name: 'Manajemen Tier & Pelanggan', icon: <Users size={18} /> },
                 { name: 'Distribusi', icon: <Truck size={18} /> },
+                { name: 'Daftar Konsinyasi', icon: <FileText size={18} /> },
+                { name: 'Rencana Pengiriman', icon: <BarChart3 size={18} /> },
                 { name: 'Kunjungan Sales', icon: <MapPin size={18} /> },
                 { name: 'Komisi Sales', icon: <Gift size={18} /> },
             ]
@@ -1319,6 +1638,7 @@ const DashboardStokis = () => {
                             border-right:1px solid var(--border-color);
                         }
                         .ph-list-header-cell:last-child { border-right:none; text-align:center; }
+                        .ph-list-header-cell:nth-child(2) { text-align:center; }
 
                         /* Product card row */
                         .ph-card {
@@ -1350,7 +1670,7 @@ const DashboardStokis = () => {
                         }
 
                         /* Info col */
-                        .ph-col-info { flex-direction:column; align-items:flex-start; gap:0.35rem; }
+                        .ph-col-info { flex-direction:column; align-items:flex-start; justify-content:center; gap:0.35rem; }
                         .ph-product-name { font-size:0.88rem; font-weight:700; color:var(--text-main); line-height:1.3; }
                         .ph-stock-chip {
                             display:inline-flex; align-items:center; gap:0.3rem;
@@ -1472,6 +1792,24 @@ const DashboardStokis = () => {
                                                 ))
                                             ) : (
                                                 <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Belum ada tier harga</span>
+                                            )}
+                                            {p.packagings?.length > 0 && p.packagings.flatMap((pkg, pi) =>
+                                                (pkg.priceTiers || []).map((tier, idx) => (
+                                                    <div className="ph-tier-row" key={`pkg-${pkg.id}-${idx}`} style={{ background: 'rgba(16,185,129,0.04)', paddingLeft: '1.1rem', borderTop: pi === 0 && idx === 0 ? '1px dashed rgba(16,185,129,0.2)' : 'none' }}>
+                                                        <span className="ph-tier-name" style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                            <span style={{ fontSize: '0.7em' }}>📦</span>
+                                                            {pkg.name} · {tier.level_name}
+                                                        </span>
+                                                        <div className="ph-tier-price-block">
+                                                            <span className="ph-tier-price-label">Harga / Kemasan</span>
+                                                            <span className="ph-tier-price-value" style={{ color: '#10b981' }}>Rp {Number(tier.price).toLocaleString('id-ID')}</span>
+                                                        </div>
+                                                        <div className="ph-tier-comm-block">
+                                                            <span className="ph-tier-comm-label">Komisi</span>
+                                                            <span className="ph-tier-comm-value">Rp {Number(tier.commission).toLocaleString('id-ID')}</span>
+                                                        </div>
+                                                    </div>
+                                                ))
                                             )}
                                         </div>
                                         {/* Actions */}
@@ -1727,14 +2065,19 @@ const DashboardStokis = () => {
                                         </div>
                                         <div style={{display:'flex',flexWrap:'wrap',gap:'0.35rem'}}>
                                             {(() => {
-                                                const tiers = t.userPriceTiers || [];
-                                                const uniqueTiers = [...new Set(tiers.map(pt => pt.level_name).filter(Boolean))];
-                                                if (uniqueTiers.length === 0) {
+                                                const priceTiers = [...new Set((t.userPriceTiers || []).map(pt => pt.level_name).filter(Boolean))];
+                                                const pkgTiers = [...new Set((t.userPackagingTiers || []).map(pt => pt.level_name).filter(Boolean))];
+                                                if (priceTiers.length === 0 && pkgTiers.length === 0) {
                                                     return <span className="cust-price-level">Harga Umum</span>;
                                                 }
-                                                return uniqueTiers.map(tier => (
-                                                    <span key={tier} className="cust-price-level" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',borderColor:'rgba(99,102,241,0.3)',fontSize:'0.68rem'}}>{tier}</span>
-                                                ));
+                                                return <>
+                                                    {priceTiers.map(tier => (
+                                                        <span key={`price-${tier}`} className="cust-price-level" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',borderColor:'rgba(99,102,241,0.3)',fontSize:'0.68rem'}}>{tier}</span>
+                                                    ))}
+                                                    {pkgTiers.map(tier => (
+                                                        <span key={`pkg-${tier}`} className="cust-price-level" title="Tier Kemasan" style={{background:'rgba(16,185,129,0.12)',color:'#10b981',borderColor:'rgba(16,185,129,0.3)',fontSize:'0.68rem'}}>📦 {tier}</span>
+                                                    ))}
+                                                </>;
                                             })()}
                                         </div>
                                         <div className="cust-actions">
@@ -1883,7 +2226,7 @@ const DashboardStokis = () => {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                                             <div className="tm-stat-mini"><span className="tm-stat-mini-label">PO Bulan Ini: </span><span className="tm-stat-mini-value">0</span></div>
                                             {t.role === 'SALES' && (
-                                                <div className="tm-stat-mini"><span className="tm-stat-mini-label">Komisi: </span><span className="tm-stat-mini-value" style={{ color: '#818cf8' }}>Rp 0</span></div>
+                                                <div className="tm-stat-mini"><span className="tm-stat-mini-label">Komisi: </span><span className="tm-stat-mini-value" style={{ color: '#818cf8' }}>Rp {(salesCommissionMap[t.id] || 0).toLocaleString('id-ID')}</span></div>
                                             )}
                                             {t.role === 'DRIVER' && (
                                                 <div className="tm-stat-mini"><span className="tm-stat-mini-label">Pengiriman: </span><span className="tm-stat-mini-value" style={{ color: '#f59e0b' }}>0</span></div>
@@ -1973,8 +2316,8 @@ const DashboardStokis = () => {
                             <button className={`dist-btn-view ${viewMode === 'MAP' ? 'active-map' : ''}`} onClick={() => setViewMode('MAP')}>
                                 <MapPin size={14} /> Live Radar Tracker
                             </button>
-                            <button className="dist-btn-sim" onClick={handleGenerateDummyOrder}>
-                                <Bell size={14} /> Simulasi PO Masuk
+                            <button className="dist-btn-sim" onClick={() => setActiveTab('Daftar Konsinyasi')}>
+                                <Bell size={14} /> Daftar Konsinyasi
                             </button>
                         </div>
                     </div>
@@ -2156,7 +2499,15 @@ const DashboardStokis = () => {
                                     return (
                                         <div className="dist-row" key={o.id}>
                                             <div>
-                                                <span className="dist-invoice">{o.invoice_id}</span>
+                                                {o.isKonsinyasi ? (
+                                                    <>
+                                                        <span style={{ display: 'inline-block', marginBottom: 4, padding: '2px 8px', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: 6, color: '#b45309', fontSize: 11, fontWeight: 700 }}>🏷️ Konsinyasi</span>
+                                                        <div className="dist-invoice" style={{ fontSize: '.8rem' }}>{o.invoice_id.replace(/-\d{13}$/, '')}</div>
+                                                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: 1, wordBreak: 'break-all' }}>{o.invoice_id}</div>
+                                                    </>
+                                                ) : (
+                                                    <span className="dist-invoice">{o.invoice_id}</span>
+                                                )}
                                                 <div className="dist-date">{new Date(o.date).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
                                             </div>
                                             <div>
@@ -2166,7 +2517,7 @@ const DashboardStokis = () => {
                                             <div>
                                                 {o.items?.map((item, idx) => (
                                                     <div key={idx} className="dist-item-row">
-                                                        <span style={{ fontWeight: 700 }}>{item.quantity}x</span> {item.product?.name}
+                                                        <span style={{ fontWeight: 700 }}>{item.quantity} {item.packagingName || 'unit'} x</span> {item.product?.name}
                                                         <div className="dist-item-price">@ Rp {Number(item.price).toLocaleString('id-ID')}</div>
                                                     </div>
                                                 ))}
@@ -2211,9 +2562,38 @@ const DashboardStokis = () => {
         }
 
         if (activeTab === 'Laporan') {
-            const totalRevenue = orders.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+            // ===== PERHITUNGAN DETAIL PENJUALAN =====
+            // Detail status order
+            const deliveredOrders = orders.filter(o => o.status === 'DELIVERED');
+            const shippedOrders = orders.filter(o => o.status === 'SHIPPED');
+            const pendingOrders = orders.filter(o => o.status === 'PENDING');
+            const cancelledOrders = orders.filter(o => o.status === 'CANCELLED');
+            
+            // Revenue per status
+            const deliveredRevenue = deliveredOrders.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+            const shippedRevenue = shippedOrders.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+            const pendingRevenue = pendingOrders.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+            
+            // ✅ TOTAL PENJUALAN = Hanya yang CONFIRMED (Delivered + Shipped) / tidak termasuk PENDING
+            const totalRevenue = deliveredRevenue + shippedRevenue;
+            
+            // ===== PERHITUNGAN DETAIL PEMBELIAN =====
             const totalPurchase = purchases.reduce((acc, curr) => acc + (curr.price_buy * curr.quantity), 0);
+            const totalPurchaseQty = purchases.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+            const avgPurchasePrice = purchases.length > 0 ? totalPurchase / totalPurchaseQty : 0;
+            
+            // ===== PERHITUNGAN LABA =====
             const grossProfit = totalRevenue - totalPurchase;
+            const grossMargin = totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(2) : 0;
+            
+            // Total komisi (jika ada data sales)
+            const totalCommission = Object.values(salesCommissionMap).reduce((a, b) => a + b, 0);
+            const netProfit = grossProfit - totalCommission;
+            
+            // Item terjual dari order yang CONFIRMED (tidak pending)
+            const totalItemsSold = deliveredOrders.concat(shippedOrders).reduce((acc, curr) => {
+                return acc + (curr.items ? curr.items.reduce((a, b) => a + (b.quantity || 0), 0) : 0);
+            }, 0);
 
             return (
                 <div className="animate-fade-up delay-100">
@@ -2223,23 +2603,44 @@ const DashboardStokis = () => {
                         .lap-header-left p { font-size:.8rem; color:var(--text-muted); margin:0; }
                         .lap-print-btn { display:inline-flex; align-items:center; gap:.5rem; padding:.6rem 1.25rem; border-radius:10px; border:1.5px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:.82rem; font-weight:600; cursor:pointer; transition:all .2s; white-space:nowrap; }
                         .lap-print-btn:hover { background:var(--bg-hover,rgba(255,255,255,.05)); border-color:#6366f1; color:#818cf8; }
-                        .lap-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.75rem; }
-                        @media(max-width:768px){ .lap-stats{ grid-template-columns:1fr; } }
+                        .lap-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin-bottom:1.75rem; }
+                        @media(max-width:1024px){ .lap-stats{ grid-template-columns:repeat(2,1fr); } }
+                        @media(max-width:640px){ .lap-stats{ grid-template-columns:1fr; } }
                         .lap-stat-card { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:14px; padding:1.25rem 1.4rem; display:flex; align-items:center; gap:1rem; }
                         .lap-stat-icon { width:46px; height:46px; border-radius:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
                         .lap-stat-icon.green { background:rgba(34,197,94,.12); color:#22c55e; }
                         .lap-stat-icon.blue  { background:rgba(59,130,246,.12); color:#3b82f6; }
                         .lap-stat-icon.indigo{ background:rgba(99,102,241,.12); color:#6366f1; }
+                        .lap-stat-icon.purple { background:rgba(168,85,247,.12); color:#a855f7; }
+                        .lap-stat-icon.orange { background:rgba(251,146,60,.12); color:#fb923c; }
                         .lap-stat-icon.red   { background:rgba(239,68,68,.12);  color:#ef4444; }
                         .lap-stat-body { flex:1; min-width:0; }
                         .lap-stat-label { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); margin-bottom:.3rem; }
-                        .lap-stat-value { font-size:1.2rem; font-weight:800; font-family:'Courier New',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                        .lap-stat-value { font-size:1.1rem; font-weight:800; font-family:'Courier New',monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
                         .lap-stat-value.positive { color:#22c55e; }
                         .lap-stat-value.negative { color:#ef4444; }
+                        .lap-stat-value.blue { color:#3b82f6; }
                         .lap-stat-sub { font-size:.72rem; color:var(--text-muted); margin-top:.2rem; }
                         .lap-section-title { font-size:.95rem; font-weight:800; margin:0 0 1rem; display:flex; align-items:center; gap:.5rem; }
                         .lap-section-title span.icon { width:30px; height:30px; border-radius:8px; background:rgba(99,102,241,.12); color:#818cf8; display:inline-flex; align-items:center; justify-content:center; }
                         .lap-panel { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:14px; padding:1.4rem; margin-bottom:1.5rem; }
+                        .lap-detail-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; margin-bottom:1.5rem; }
+                        @media(max-width:768px){ .lap-detail-grid{ grid-template-columns:1fr; } }
+                        .lap-detail-section { background:var(--bg-main); padding:1rem; border-radius:10px; border:1px solid var(--border-color); }
+                        .lap-detail-row { display:flex; justify-content:space-between; align-items:center; padding:.5rem 0; border-bottom:1px solid var(--border-color); font-size:.85rem; }
+                        .lap-detail-row:last-child { border-bottom:none; }
+                        .lap-detail-label { color:var(--text-muted); font-weight:600; }
+                        .lap-detail-value { font-weight:700; font-family:'Courier New',monospace; }
+                        .lap-detail-value.green { color:#22c55e; }
+                        .lap-detail-value.blue { color:#3b82f6; }
+                        .lap-detail-value.purple { color:#a855f7; }
+                        .lap-detail-value.red { color:#ef4444; }
+                        .lap-profit-breakdown { background:linear-gradient(135deg,rgba(129,140,248,.05),rgba(168,85,247,.05)); border:1.5px solid rgba(129,140,248,.2); border-radius:12px; padding:1.25rem; margin-bottom:1.5rem; }
+                        .lap-profit-row { display:flex; justify-content:space-between; align-items:center; padding:.65rem 0; border-bottom:1px solid var(--border-color); font-size:.9rem; }
+                        .lap-profit-row:last-child { border-bottom:none; padding-top:.8rem; border-top:2px solid var(--border-color); margin-top:.8rem; }
+                        .lap-profit-row.total { font-weight:800; font-size:1rem; }
+                        .lap-profit-label { font-weight:600; }
+                        .lap-profit-value { font-weight:700; font-family:'Courier New',monospace; }
                         .lap-list-header { display:grid; grid-template-columns:2fr 1fr 1fr 80px; gap:.75rem; padding:.4rem .75rem; margin-bottom:.5rem; }
                         .lap-list-header span { font-size:.67rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); }
                         .lap-item { display:grid; grid-template-columns:2fr 1fr 1fr 80px; gap:.75rem; align-items:center; padding:.75rem; border-radius:10px; border:1.5px solid var(--border-color); margin-bottom:.6rem; background:var(--bg-main,transparent); transition:border-color .18s; }
@@ -2261,43 +2662,308 @@ const DashboardStokis = () => {
                     <div className="lap-header">
                         <div className="lap-header-left">
                             <h2>Laporan Finansial & Stok</h2>
-                            <p>Rekapitulasi performa gudang pusat dan jaringan distribusi.</p>
+                            <p>Rekapitulasi performa gudang pusat dan jaringan distribusi (Detail & Transparan).</p>
                         </div>
                         <button className="lap-print-btn" onClick={() => window.print()}>
                             <FileText size={15} /> Print Laporan (PDF)
                         </button>
                     </div>
 
-                    {/* KPI Stat Cards */}
+                    {/* KPI Stat Cards - EXPANDED */}
                     <div className="lap-stats">
                         <div className="lap-stat-card">
                             <div className="lap-stat-icon green"><TrendingUp size={20} /></div>
                             <div className="lap-stat-body">
-                                <div className="lap-stat-label">Total Penjualan</div>
-                                <div className="lap-stat-value">Rp {totalRevenue.toLocaleString('id-ID')}</div>
-                                <div className="lap-stat-sub">{orders.filter(o => o.status === 'DELIVERED').length} order tuntas</div>
+                                <div className="lap-stat-label">Total Penjualan (Confirmed)</div>
+                                <div className="lap-stat-value green">Rp {totalRevenue.toLocaleString('id-ID')}</div>
+                                <div className="lap-stat-sub">✓ {deliveredOrders.length} Terkirim + 🚚 {shippedOrders.length} Shipping</div>
                             </div>
                         </div>
                         <div className="lap-stat-card">
                             <div className="lap-stat-icon blue"><ShoppingCart size={20} /></div>
                             <div className="lap-stat-body">
-                                <div className="lap-stat-label">Total Pembelian (Restock)</div>
-                                <div className="lap-stat-value">Rp {totalPurchase.toLocaleString('id-ID')}</div>
-                                <div className="lap-stat-sub">{purchases.length} kali restock pabrik</div>
+                                <div className="lap-stat-label">Total Pembelian</div>
+                                <div className="lap-stat-value blue">Rp {totalPurchase.toLocaleString('id-ID')}</div>
+                                <div className="lap-stat-sub">{purchases.length} restock • {totalPurchaseQty} unit</div>
                             </div>
                         </div>
                         <div className="lap-stat-card">
-                            <div className={`lap-stat-icon ${grossProfit >= 0 ? 'indigo' : 'red'}`}>
-                                <BarChart3 size={20} />
-                            </div>
+                            <div className="lap-stat-icon indigo"><DollarSign size={20} /></div>
                             <div className="lap-stat-body">
-                                <div className="lap-stat-label">Laba Kotor (Estimasi)</div>
+                                <div className="lap-stat-label">Laba Kotor</div>
                                 <div className={`lap-stat-value ${grossProfit >= 0 ? 'positive' : 'negative'}`}>
                                     Rp {Math.abs(grossProfit).toLocaleString('id-ID')}
                                 </div>
-                                <div className="lap-stat-sub">{grossProfit >= 0 ? 'Surplus dari selisih omzet' : 'Defisit, periksa margin'}</div>
+                                <div className="lap-stat-sub">Margin: {grossMargin}%</div>
                             </div>
                         </div>
+                        <div className="lap-stat-card">
+                            <div className={`lap-stat-icon ${netProfit >= 0 ? 'purple' : 'red'}`}>
+                                <BarChart3 size={20} />
+                            </div>
+                            <div className="lap-stat-body">
+                                <div className="lap-stat-label">Laba Bersih</div>
+                                <div className={`lap-stat-value ${netProfit >= 0 ? 'positive' : 'negative'}`}>
+                                    Rp {Math.abs(netProfit).toLocaleString('id-ID')}
+                                </div>
+                                <div className="lap-stat-sub">Setelah komisi: {team.filter(t => t.role === 'SALES').length} sales</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* INFO PENDING (tidak masuk total penjualan) */}
+                    {pendingOrders.length > 0 && (
+                        <div style={{background:'rgba(234,179,8,.08)',border:'1.5px solid rgba(234,179,8,.25)',borderRadius:'12px',padding:'1rem',marginBottom:'1.5rem',display:'flex',alignItems:'center',gap:'1rem'}}>
+                            <div style={{fontSize:'1.5rem'}}>⏳</div>
+                            <div>
+                                <div style={{fontSize:'.85rem',fontWeight:800,color:'#eab308'}}>ADA {pendingOrders.length} ORDER PENDING (Tidak terhitung di Penjualan)</div>
+                                <div style={{fontSize:'.78rem',color:'var(--text-muted)',marginTop:'.25rem'}}>Potensi Revenue: Rp {pendingRevenue.toLocaleString('id-ID')} (akan terhitung saat status berubah ke Shipped/Delivered)</div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* DETAIL BREAKDOWN - PENJUALAN */}
+                    <div className="lap-detail-grid">
+                        <div className="lap-detail-section">
+                            <div style={{fontSize:'.9rem',fontWeight:800,marginBottom:'.75rem',color:'#22c55e'}}>📊 DETAIL PENJUALAN (CONFIRMED ONLY)</div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">✓ Order Terkirim</span>
+                                <span className="lap-detail-value green">{deliveredOrders.length} Order</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Revenue Terkirim</span>
+                                <span className="lap-detail-value green">Rp {deliveredRevenue.toLocaleString('id-ID')}</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">🚚 Order Sedang Dikirim</span>
+                                <span className="lap-detail-value blue">{shippedOrders.length} Order</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Revenue Shipping</span>
+                                <span className="lap-detail-value blue">Rp {shippedRevenue.toLocaleString('id-ID')}</span>
+                            </div>
+                            {pendingOrders.length > 0 && (
+                                <div className="lap-detail-row" style={{background:'rgba(234,179,8,.08)',padding:'.35rem .35rem',borderRadius:'6px',fontWeight:700}}>
+                                    <span className="lap-detail-label">⏳ Order Pending (⚠️ TIDAK DIHITUNG)</span>
+                                    <span style={{color:'#eab308'}}>{pendingOrders.length} Order • Rp {pendingRevenue.toLocaleString('id-ID')}</span>
+                                </div>
+                            )}
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">= TOTAL PENJUALAN (Confirmed)</span>
+                                <span className="lap-detail-value green" style={{fontWeight:900,fontSize:'1rem'}}>Rp {totalRevenue.toLocaleString('id-ID')}</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Total Item Terjual (Confirmed)</span>
+                                <span className="lap-detail-value">{totalItemsSold} unit</span>
+                            </div>
+                        </div>
+
+                        {/* DETAIL BREAKDOWN - PEMBELIAN */}
+                        <div className="lap-detail-section">
+                            <div style={{fontSize:'.9rem',fontWeight:800,marginBottom:'.75rem',color:'#3b82f6'}}>📦 DETAIL PEMBELIAN (RESTOCK)</div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Total Modal Beli</span>
+                                <span className="lap-detail-value blue">Rp {totalPurchase.toLocaleString('id-ID')}</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Frekuensi Restock</span>
+                                <span className="lap-detail-value blue">{purchases.length} kali</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Total Qty Dibeli</span>
+                                <span className="lap-detail-value blue">{totalPurchaseQty} unit</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Rata-rata Harga/Unit</span>
+                                <span className="lap-detail-value blue">Rp {avgPurchasePrice.toLocaleString('id-ID', {maximumFractionDigits: 0})}</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Rata-rata Harga Jual/Unit</span>
+                                <span className="lap-detail-value blue">Rp {(totalItemsSold > 0 ? totalRevenue / totalItemsSold : 0).toLocaleString('id-ID', {maximumFractionDigits: 0})}</span>
+                            </div>
+                            <div className="lap-detail-row">
+                                <span className="lap-detail-label">Markup Per Unit</span>
+                                <span className="lap-detail-value green">Rp {(totalItemsSold > 0 ? (totalRevenue / totalItemsSold) - avgPurchasePrice : 0).toLocaleString('id-ID', {maximumFractionDigits: 0})}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* PROFIT BREAKDOWN - TERPERINCI */}
+                    <div className="lap-profit-breakdown">
+                        <div style={{fontSize:'.9rem',fontWeight:800,marginBottom:'1rem',color:'#818cf8'}}>💰 PERHITUNGAN PROFIT TERPERINCI (Hanya Order Confirmed)</div>
+                        <div style={{fontSize:'.75rem',color:'var(--text-muted)',fontWeight:600,marginBottom:'1rem',paddingBottom:'0.75rem',borderBottom:'1px solid var(--border-color)'}}>
+                            📌 Basis: Order DELIVERED + SHIPPED saja (Pending TIDAK dihitung)
+                        </div>
+                        
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">➕ Revenue Penjualan (Terkirim)</span>
+                            <span className="lap-profit-value">Rp {deliveredRevenue.toLocaleString('id-ID')} ({deliveredOrders.length} order)</span>
+                        </div>
+                        
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">➕ Revenue Shipping (In-Transit)</span>
+                            <span className="lap-profit-value">Rp {shippedRevenue.toLocaleString('id-ID')} ({shippedOrders.length} order)</span>
+                        </div>
+
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">────────────────────</span>
+                            <span className="lap-profit-value">─────────────────────</span>
+                        </div>
+                        
+                        <div className="lap-profit-row" style={{fontWeight:700}}>
+                            <span className="lap-profit-label">= TOTAL REVENUE (Confirmed Only)</span>
+                            <span className="lap-profit-value" style={{color:'#22c55e',fontSize:'.95rem'}}>Rp {totalRevenue.toLocaleString('id-ID')}</span>
+                        </div>
+                        
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">➖ Cost of Goods Sold (Modal Beli)</span>
+                            <span className="lap-profit-value">Rp {totalPurchase.toLocaleString('id-ID')}</span>
+                        </div>
+                        
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">= Gross Profit (Laba Kotor)</span>
+                            <span className={`lap-profit-value ${grossProfit >= 0 ? 'green' : 'red'}`}>
+                                Rp {Math.abs(grossProfit).toLocaleString('id-ID')}
+                            </span>
+                        </div>
+
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">( Margin: {grossMargin}% )</span>
+                            <span className="lap-profit-value" style={{color:'var(--text-muted)',fontSize:'.8rem'}}>
+                                {grossProfit >= 0 ? '✓ Healthy' : '⚠ Negative'}
+                            </span>
+                        </div>
+
+                        <div className="lap-profit-row">
+                            <span className="lap-profit-label">➖ Total Komisi Sales</span>
+                            <span className="lap-profit-value">Rp {totalCommission.toLocaleString('id-ID')}</span>
+                        </div>
+
+                        <div className="lap-profit-row total">
+                            <span className="lap-profit-label">= NET PROFIT (Laba Bersih)</span>
+                            <span className={`lap-profit-value ${netProfit >= 0 ? 'green' : 'red'}`} style={{fontSize:'1.1rem'}}>
+                                Rp {Math.abs(netProfit).toLocaleString('id-ID')}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* DETAIL KOMISI SALES */}
+                    <div className="lap-panel">
+                        <div className="lap-section-title">
+                            <span className="icon" style={{background:'rgba(232,121,249,.12)',color:'#e879f9'}}>👥</span>
+                            Detail Komisi Sales Team
+                        </div>
+                        
+                        <style>{`
+                            .comm-stat-overview { display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; margin-bottom:1.5rem; }
+                            @media(max-width:640px){ .comm-stat-overview{ grid-template-columns:1fr; } }
+                            .comm-stat-box { background:var(--bg-main); border:1.5px solid var(--border-color); border-radius:10px; padding:1rem; }
+                            .comm-stat-box-label { font-size:.75rem; font-weight:800; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); margin-bottom:.4rem; }
+                            .comm-stat-box-value { font-size:1.15rem; font-weight:800; font-family:'Courier New',monospace; color:#e879f9; margin-bottom:.3rem; }
+                            .comm-stat-box-sub { font-size:.78rem; color:var(--text-muted); }
+                            .comm-table-wrapper { overflow-x:auto; }
+                            .comm-table-header { display:grid; grid-template-columns:2fr 1fr 1.2fr 1.2fr 0.8fr; gap:1rem; padding:.75rem; background:rgba(99,102,241,.05); border-radius:10px; border-bottom:2px solid var(--border-color); margin-bottom:.5rem; }
+                            .comm-table-header span { font-size:.72rem; font-weight:800; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); }
+                            .comm-table-row { display:grid; grid-template-columns:2fr 1fr 1.2fr 1.2fr 0.8fr; gap:1rem; align-items:center; padding:.8rem; border-radius:8px; border:1.5px solid var(--border-color); margin-bottom:.5rem; background:var(--bg-main); transition:border-color .18s; }
+                            .comm-table-row:hover { border-color:#e879f9; }
+                            .comm-sales-name { font-weight:700; font-size:.9rem; }
+                            .comm-sales-role { font-size:.72rem; color:var(--text-muted); margin-top:.15rem; }
+                            .comm-sales-orders { text-align:center; font-weight:600; font-size:.9rem; }
+                            .comm-commission-amount { font-family:'Courier New',monospace; font-weight:800; color:#e879f9; text-align:right; }
+                            .comm-commission-percent { font-size:.8rem; color:var(--text-muted); text-align:right; }
+                            .comm-action-btn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:6px; border:1.5px solid var(--border-color); background:rgba(255,255,255,.02); cursor:pointer; transition:all .18s; color:var(--text-muted); font-size:.9rem; }
+                            .comm-action-btn:hover { border-color:#e879f9; color:#e879f9; background:rgba(232,121,249,.08); }
+                            .comm-empty { text-align:center; padding:2rem 1rem; color:var(--text-muted); font-size:.85rem; border:1px dashed var(--border-color); border-radius:10px; }
+                        `}</style>
+
+                        {/* Overview Stats */}
+                        <div className="comm-stat-overview">
+                            <div className="comm-stat-box">
+                                <div className="comm-stat-box-label">Total Komisi (Semua Sales)</div>
+                                <div className="comm-stat-box-value">Rp {totalCommission.toLocaleString('id-ID')}</div>
+                                <div className="comm-stat-box-sub">
+                                    {totalRevenue > 0 ? `${((totalCommission / totalRevenue) * 100).toFixed(2)}% dari revenue` : 'Belum ada penjualan'}
+                                </div>
+                            </div>
+                            <div className="comm-stat-box">
+                                <div className="comm-stat-box-label">Jumlah Sales Team</div>
+                                <div className="comm-stat-box-value">{team.filter(t => t.role === 'SALES').length}</div>
+                                <div className="comm-stat-box-sub">
+                                    {team.filter(t => t.role === 'SALES').length > 0 ? `Rata-rata: Rp ${(totalCommission / team.filter(t => t.role === 'SALES').length).toLocaleString('id-ID', {maximumFractionDigits: 0})}` : 'Belum ada tim'}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Table Komisi Per Sales */}
+                        {team.filter(t => t.role === 'SALES').length === 0 ? (
+                            <div className="comm-empty">
+                                <div style={{fontSize:'1rem',marginBottom:'.5rem'}}>👤</div>
+                                Belum ada Sales Team. Tambahkan anggota tim untuk tracking komisi.
+                            </div>
+                        ) : (
+                            <div className="comm-table-wrapper">
+                                <div className="comm-table-header">
+                                    <span>Nama Sales</span>
+                                    <span>Order Dibuat</span>
+                                    <span>Total Komisi</span>
+                                    <span>% dari Revenue</span>
+                                    <span> </span>
+                                </div>
+                                {team.filter(t => t.role === 'SALES').map(sales => {
+                                    const salesComm = salesCommissionMap[sales.id] || 0;
+                                    const salesOrders = orders.filter(o => o.salesId === sales.id);
+                                    const salesRevenue = salesOrders.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+                                    const commPercentage = totalRevenue > 0 ? ((salesComm / totalRevenue) * 100).toFixed(2) : 0;
+                                    
+                                    return (
+                                        <div className="comm-table-row" key={sales.id}>
+                                            <div>
+                                                <div className="comm-sales-name">{sales.name}</div>
+                                                <div className="comm-sales-role">{sales.store_name || '(Tanpa nama toko)'}</div>
+                                            </div>
+                                            <div className="comm-sales-orders">{salesOrders.length}</div>
+                                            <div>
+                                                <div className="comm-commission-amount">Rp {salesComm.toLocaleString('id-ID')}</div>
+                                                <div className="comm-commission-percent">dari Rp {salesRevenue.toLocaleString('id-ID')}</div>
+                                            </div>
+                                            <div>
+                                                <div className="comm-commission-amount">{commPercentage}%</div>
+                                                <div className="comm-commission-percent">komisi</div>
+                                            </div>
+                                            <div style={{textAlign:'center'}}>
+                                                <div className="comm-action-btn" title="Lihat detail" onClick={() => fetchSalesReport(sales.id)}>
+                                                    👁️
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Sales Report Detail */}
+                        {salesReportId && salesReportData && (
+                            <div style={{marginTop:'1.5rem',padding:'1.25rem',background:'linear-gradient(135deg,rgba(232,121,249,.08),rgba(168,85,247,.08))',border:'1.5px solid rgba(232,121,249,.2)',borderRadius:'12px'}}>
+                                <div style={{fontSize:'.9rem',fontWeight:800,marginBottom:'1rem',color:'#e879f9'}}>
+                                    📋 DETAIL KOMISI - {team.find(t => t.id === salesReportId)?.name || 'Sales'}
+                                </div>
+                                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'1rem',marginBottom:'1rem'}}>
+                                    <div style={{background:'var(--bg-main)',padding:'.75rem',borderRadius:'8px',border:'1px solid var(--border-color)'}}>
+                                        <div style={{fontSize:'.7rem',color:'var(--text-muted)',fontWeight:700,marginBottom:'.25rem'}}>TOTAL ORDER</div>
+                                        <div style={{fontSize:'1.1rem',fontWeight:800,color:'#e879f9'}}>{salesReportData.orders.length}</div>
+                                    </div>
+                                    <div style={{background:'var(--bg-main)',padding:'.75rem',borderRadius:'8px',border:'1px solid var(--border-color)'}}>
+                                        <div style={{fontSize:'.7rem',color:'var(--text-muted)',fontWeight:700,marginBottom:'.25rem'}}>KONSUMEN</div>
+                                        <div style={{fontSize:'1.1rem',fontWeight:800,color:'#e879f9'}}>{salesReportData.consumers.length}</div>
+                                    </div>
+                                    <div style={{background:'var(--bg-main)',padding:'.75rem',borderRadius:'8px',border:'1px solid var(--border-color)'}}>
+                                        <div style={{fontSize:'.7rem',color:'var(--text-muted)',fontWeight:700,marginBottom:'.25rem'}}>TOTAL KOMISI</div>
+                                        <div style={{fontSize:'1.1rem',fontWeight:800,color:'#e879f9'}}>Rp {salesReportData.grandTotalCommission.toLocaleString('id-ID')}</div>
+                                    </div>
+                                </div>
+                                {salesReportLoading && <div style={{textAlign:'center',color:'var(--text-muted)',fontSize:'.85rem'}}>Memuat detail...</div>}
+                            </div>
+                        )}
                     </div>
 
                     {/* Produk Paling Laris */}
@@ -2363,6 +3029,208 @@ const DashboardStokis = () => {
                             </div>
                         </div>
                     </div>
+                </div>
+            );
+        }
+
+        if (activeTab === 'Daftar Konsinyasi') {
+            const detailContract = konsinyasiList.find(c => c.id === konsinyasiDetailId);
+            const STATUS_COLOR = { DRAFT: '#6b7280', ACTIVE: '#22c55e', PAUSED: '#f59e0b', TERMINATED: '#ef4444' };
+            const SCHED_COLOR = { SCHEDULED: '#818cf8', DISPATCHED: '#f59e0b', DELIVERED: '#22c55e', CANCELLED: '#6b7280' };
+
+            return (
+                <div className="animate-fade-up">
+                    <style>{`
+                        .kns-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem; }
+                        .kns-header h2 { font-size:1.2rem; font-weight:800; margin:0 0 .25rem; }
+                        .kns-header p { font-size:.8rem; color:var(--text-muted); margin:0; }
+                        .kns-layout { display:grid; grid-template-columns:340px 1fr; gap:1.25rem; }
+                        @media(max-width:1000px){ .kns-layout{ grid-template-columns:1fr; } }
+                        .kns-list-panel { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:14px; overflow:hidden; }
+                        .kns-list-head { padding:.9rem 1.1rem; border-bottom:1.5px solid var(--border-color); font-size:.78rem; font-weight:800; display:flex; justify-content:space-between; align-items:center; }
+                        .kns-list-item { padding:.85rem 1.1rem; border-bottom:1px solid var(--border-color); cursor:pointer; transition:background .13s; display:flex; flex-direction:column; gap:.35rem; }
+                        .kns-list-item:last-child { border-bottom:none; }
+                        .kns-list-item:hover { background:rgba(99,102,241,.05); }
+                        .kns-list-item.active { background:rgba(99,102,241,.1); border-left:3px solid #818cf8; }
+                        .kns-list-item-top { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+                        .kns-list-store { font-weight:700; font-size:.85rem; }
+                        .kns-list-no { font-size:.68rem; font-family:'Courier New',monospace; color:var(--text-muted); }
+                        .kns-status-badge { display:inline-block; padding:.2rem .55rem; border-radius:20px; font-size:.65rem; font-weight:700; }
+                        .kns-detail-panel { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:14px; padding:1.5rem; }
+                        .kns-detail-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; height:300px; gap:1rem; color:var(--text-muted); font-size:.85rem; }
+                        .kns-section-title { font-size:.75rem; font-weight:800; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); margin:1.25rem 0 .75rem; display:flex; align-items:center; gap:.5rem; }
+                        .kns-section-title::before { content:''; flex:1; height:1px; background:var(--border-color); }
+                        .kns-kyc-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; margin-bottom:.75rem; }
+                        @media(max-width:700px){ .kns-kyc-grid{ grid-template-columns:1fr; } }
+                        .kns-kyc-field label { font-size:.65rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); display:block; margin-bottom:.25rem; }
+                        .kns-kyc-value { font-size:.83rem; font-weight:600; }
+                        .kns-items-table { width:100%; border-collapse:collapse; font-size:.8rem; }
+                        .kns-items-table th { padding:.55rem .75rem; text-align:left; font-size:.65rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); border-bottom:1.5px solid var(--border-color); }
+                        .kns-items-table td { padding:.6rem .75rem; border-bottom:1px solid var(--border-color); }
+                        .kns-items-table tr:last-child td { border-bottom:none; }
+                        .kns-schedule-card { background:rgba(255,255,255,.02); border:1.5px solid var(--border-color); border-radius:10px; padding:.85rem 1rem; margin-bottom:.65rem; }
+                        .kns-schedule-card:last-child { margin-bottom:0; }
+                        .kns-schedule-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:.5rem; }
+                        .kns-schedule-date { font-weight:800; font-size:.85rem; }
+                        .kns-schedule-items { font-size:.75rem; color:var(--text-muted); margin-top:.35rem; }
+                        .kns-btn { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .85rem; border-radius:8px; border:1.5px solid var(--border-color); background:transparent; color:var(--text-primary); font-size:.78rem; font-weight:700; cursor:pointer; transition:all .18s; }
+                        .kns-btn:hover { border-color:#818cf8; color:#818cf8; background:rgba(99,102,241,.07); }
+                        .kns-btn.danger:hover { border-color:#ef4444; color:#ef4444; background:rgba(239,68,68,.07); }
+                        .kns-btn.primary { background:linear-gradient(135deg,#6366f1,#8b5cf6); border-color:transparent; color:#fff; }
+                        .kns-btn.primary:hover { opacity:.9; }
+                        .kns-btn.green { background:rgba(34,197,94,.1); border-color:rgba(34,197,94,.3); color:#22c55e; }
+                        .kns-btn.green:hover { background:rgba(34,197,94,.18); }
+                        .kns-actions-row { display:flex; gap:.6rem; flex-wrap:wrap; margin-bottom:1rem; }
+                        .kns-empty-list { text-align:center; padding:2.5rem; color:var(--text-muted); font-size:.85rem; }
+                        .kns-contract-invoice { display:inline-flex; align-items:center; gap:.3rem; font-size:.68rem; font-family:'Courier New',monospace; background:rgba(99,102,241,.1); color:#818cf8; border:1px solid rgba(99,102,241,.2); border-radius:6px; padding:.2rem .5rem; }
+                    `}</style>
+
+                    <div className="kns-header">
+                        <div>
+                            <h2>Daftar Konsinyasi</h2>
+                            <p>Kelola kontrak titipan produk ke konsumen & jadwal pengirimannya.</p>
+                        </div>
+                        <div style={{display:'flex', gap:'.75rem', flexWrap:'wrap'}}>
+                            <button className="kns-btn primary" onClick={openNewKonsinyasi}>
+                                <Plus size={14} /> Buat Kontrak Baru
+                            </button>
+                            <button className="kns-btn" style={{background:'rgba(168,85,247,.12)',color:'#a855f7',borderColor:'rgba(168,85,247,.3)'}} onClick={() => setActiveTab('Rencana Pengiriman')}>
+                                <BarChart3 size={14} /> Rencana Pengiriman
+                            </button>
+                        </div>
+                    </div>
+
+                    {konsinyasiLoading ? (
+                        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>Memuat data...</div>
+                    ) : (
+                        <div className="kns-layout">
+                            {/* LEFT: Contract List */}
+                            <div className="kns-list-panel">
+                                <div className="kns-list-head">
+                                    <span>Daftar Kontrak ({konsinyasiList.length})</span>
+                                </div>
+                                {konsinyasiList.length === 0 ? (
+                                    <div className="kns-empty-list">Belum ada kontrak konsinyasi.</div>
+                                ) : konsinyasiList.map(c => (
+                                    <div key={c.id} className={`kns-list-item ${konsinyasiDetailId === c.id ? 'active' : ''}`} onClick={() => setKonsinyasiDetailId(konsinyasiDetailId === c.id ? null : c.id)}>
+                                        <div className="kns-list-item-top">
+                                            <span className="kns-list-store">{c.storeName}</span>
+                                            <span className="kns-status-badge" style={{ background: `${STATUS_COLOR[c.status]}20`, color: STATUS_COLOR[c.status], border: `1px solid ${STATUS_COLOR[c.status]}40` }}>{c.status}</span>
+                                        </div>
+                                        <span className="kns-list-no">{c.contractNo}</span>
+                                        <div style={{ fontSize: '.72rem', color: 'var(--text-muted)' }}>
+                                            {c.konsumen?.name} · {c.items.length} produk · {c.schedules.length} jadwal
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* RIGHT: Contract Detail */}
+                            <div className="kns-detail-panel">
+                                {!detailContract ? (
+                                    <div className="kns-detail-empty">
+                                        <FileText size={40} style={{ opacity: .25 }} />
+                                        <span>Pilih kontrak untuk melihat detail</span>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        {/* Header */}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '.75rem', marginBottom: '.75rem' }}>
+                                            <div>
+                                                <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: '.2rem' }}>{detailContract.storeName}</div>
+                                                <span className="kns-contract-invoice">{detailContract.contractNo}</span>
+                                            </div>
+                                            <span className="kns-status-badge" style={{ fontSize: '.75rem', padding: '.3rem .75rem', background: `${STATUS_COLOR[detailContract.status]}20`, color: STATUS_COLOR[detailContract.status], border: `1px solid ${STATUS_COLOR[detailContract.status]}40` }}>{detailContract.status}</span>
+                                        </div>
+
+                                        {/* Action buttons */}
+                                        <div className="kns-actions-row">
+                                            <button className="kns-btn" onClick={() => openEditKonsinyasi(detailContract)}><Edit3 size={13} /> Edit</button>
+                                            {detailContract.status === 'DRAFT' && <button className="kns-btn green" onClick={() => updateKonsinyasiStatus(detailContract.id, 'ACTIVE')}><CheckCircle2 size={13} /> Aktifkan</button>}
+                                            {detailContract.status === 'ACTIVE' && <button className="kns-btn" onClick={() => updateKonsinyasiStatus(detailContract.id, 'PAUSED')}><Clock size={13} /> Pause</button>}
+                                            {detailContract.status === 'PAUSED' && <button className="kns-btn green" onClick={() => updateKonsinyasiStatus(detailContract.id, 'ACTIVE')}><Zap size={13} /> Lanjutkan</button>}
+                                            {detailContract.status !== 'TERMINATED' && <button className="kns-btn danger" onClick={() => updateKonsinyasiStatus(detailContract.id, 'TERMINATED')}><X size={13} /> Terminasi</button>}
+                                            {detailContract.status === 'DRAFT' && <button className="kns-btn danger" onClick={() => deleteKonsinyasi(detailContract.id)}><X size={13} /> Hapus</button>}
+                                            {['ACTIVE', 'PAUSED'].includes(detailContract.status) && (
+                                                <button className="kns-btn primary" onClick={() => openScheduleModal(detailContract.id)}><Plus size={13} /> Tambah Jadwal Kirim</button>
+                                            )}
+                                            {detailContract.status === 'ACTIVE' && detailContract.schedules?.length === 0 && (
+                                                <button className="kns-btn green" style={{ fontWeight: 800 }} onClick={() => triggerFirstDelivery(detailContract.id)}><Zap size={13} /> Buat Pengiriman Pertama</button>
+                                            )}
+                                        </div>
+
+                                        {/* KYC Info */}
+                                        <div className="kns-section-title">Data KYC Konsumen</div>
+                                        <div className="kns-kyc-grid">
+                                            {[
+                                                { label: 'Nama Pemilik', value: detailContract.ownerName },
+                                                { label: 'Nama Toko', value: detailContract.storeName },
+                                                { label: 'Konsumen Terdaftar', value: detailContract.konsumen?.name || '-' },
+                                                { label: 'No. Handphone', value: detailContract.storePhone || '-' },
+                                                { label: 'Alamat', value: detailContract.storeAddress },
+                                                { label: 'NIK', value: detailContract.idCardNo || '-' },
+                                                { label: 'NPWP', value: detailContract.npwpNo || '-' },
+                                                { label: 'Siklus Tagihan', value: detailContract.billingCycle },
+                                                { label: 'Tgl Mulai', value: detailContract.startDate ? new Date(detailContract.startDate).toLocaleDateString('id-ID') : '-' },
+                                                { label: 'Tgl Berakhir', value: detailContract.endDate ? new Date(detailContract.endDate).toLocaleDateString('id-ID') : '-' },
+                                            ].map(f => (
+                                                <div key={f.label} className="kns-kyc-field">
+                                                    <label>{f.label}</label>
+                                                    <div className="kns-kyc-value">{f.value}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {detailContract.notes && <div style={{ fontSize: '.8rem', color: 'var(--text-muted)', marginBottom: '.5rem' }}>📝 {detailContract.notes}</div>}
+
+                                        {/* Products in contract */}
+                                        <div className="kns-section-title">Produk Titipan & Harga</div>
+                                        <table className="kns-items-table">
+                                            <thead><tr><th>Produk</th><th>Varian</th><th>Harga Titipan</th><th>Max Qty/Kirim</th></tr></thead>
+                                            <tbody>
+                                                {detailContract.items.map(it => (
+                                                    <tr key={it.id}>
+                                                        <td><div style={{ fontWeight: 700 }}>{it.product?.name}</div><span style={{ fontSize: '.68rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{it.product?.code}</span></td>
+                                                        <td>{it.packaging ? <span style={{ fontSize: '.72rem', background: 'rgba(34,197,94,.1)', color: '#86efac', border: '1px solid rgba(34,197,94,.2)', borderRadius: 6, padding: '.15rem .45rem' }}>📦 {it.packaging.name}</span> : <span style={{ fontSize: '.72rem', color: '#c084fc' }}>Satuan</span>}</td>
+                                                        <td style={{ fontWeight: 700, fontFamily: 'monospace' }}>Rp {Number(it.priceKonsinyasi).toLocaleString('id-ID')}</td>
+                                                        <td style={{ color: 'var(--text-muted)' }}>{it.maxQtyPerDelivery > 0 ? it.maxQtyPerDelivery : '∞'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+
+                                        {/* Delivery Schedules */}
+                                        <div className="kns-section-title">Jadwal Pengiriman ({detailContract.schedules.length})</div>
+                                        {detailContract.schedules.length === 0 ? (
+                                            <div style={{ color: 'var(--text-muted)', fontSize: '.83rem', textAlign: 'center', padding: '1.5rem', border: '1.5px dashed var(--border-color)', borderRadius: 10 }}>
+                                                Belum ada jadwal. Klik "Tambah Jadwal Kirim" untuk membuat.
+                                            </div>
+                                        ) : detailContract.schedules.map(s => (
+                                            <div key={s.id} className="kns-schedule-card">
+                                                <div className="kns-schedule-head">
+                                                    <div>
+                                                        <div className="kns-schedule-date">📅 {new Date(s.deliveryDate).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
+                                                        <span style={{ fontSize: '.7rem', padding: '.2rem .5rem', borderRadius: 20, background: `${SCHED_COLOR[s.status]}20`, color: SCHED_COLOR[s.status], border: `1px solid ${SCHED_COLOR[s.status]}40`, fontWeight: 700 }}>{s.status}</span>
+                                                        {s.order && <span className="kns-contract-invoice" style={{ marginLeft: '.5rem' }}>{s.order.invoice_id}</span>}
+                                                    </div>
+                                                    {s.status === 'SCHEDULED' && (
+                                                        <button className="kns-btn danger" style={{ padding: '.3rem .6rem', fontSize: '.7rem' }} onClick={() => deleteSchedule(s.id)}><X size={12} /></button>
+                                                    )}
+                                                </div>
+                                                <div className="kns-schedule-items">
+                                                    {s.items.map(si => (
+                                                        <span key={si.id} style={{ marginRight: '.75rem' }}>
+                                                            {si.product?.code} × {si.quantity}{si.packaging ? ` ${si.packaging.name}` : ' unit'}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                {s.notes && <div style={{ fontSize: '.73rem', color: 'var(--text-muted)', marginTop: '.35rem' }}>📝 {s.notes}</div>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
@@ -2501,6 +3369,336 @@ const DashboardStokis = () => {
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            );
+        }
+
+        if (activeTab === 'Rencana Pengiriman') {
+            const activeContracts = konsinyasiList.filter(c => c.status === 'ACTIVE');
+            // Get all products with konsinyasi pricing
+            const konsinyasiProducts = products.filter(p => {
+                const hasKonsinyasiPrice = team.some(t => 
+                    t.pricingOverrides?.some(po => po.productId === p.id && po.level_name?.includes('Konsinyasi'))
+                );
+                return hasKonsinyasiPrice || p.name?.toLowerCase().includes('konsinyasi');
+            });
+
+            const addDeliveryRow = (contractId = '') => {
+                const newId = Date.now();
+                const newRows = [];
+
+                if (contractId) {
+                    // Auto-generate rows untuk setiap produk dalam kontrak
+                    const contract = konsinyasiList.find(c => c.id === contractId);
+                    if (contract) {
+                        contract.items.forEach((item, idx) => {
+                            // Auto-select "Konsinyasi" packaging if available
+                            const konsinyasiPackaging = item.product?.packagings?.find(pkg => pkg.name?.toLowerCase() === 'konsinyasi');
+                            const selectedPackaging = konsinyasiPackaging || item.packaging || item.product?.packagings?.[0];
+                            
+                            newRows.push({
+                                id: newId + idx,
+                                deliveryDate: '',
+                                contractId: contractId,
+                                storeName: contract.storeName,
+                                productId: item.product?.id || '',
+                                productName: item.product?.name || '',
+                                packagingId: selectedPackaging?.id || '',
+                                packagingName: selectedPackaging?.name || 'Satuan',
+                                quantity: 0,
+                                isFromContract: true
+                            });
+                        });
+                    }
+                } else {
+                    // Empty row untuk tambah produk lain
+                    newRows.push({
+                        id: newId,
+                        deliveryDate: '',
+                        contractId: '',
+                        storeName: '',
+                        productId: '',
+                        productName: '',
+                        packagingId: '',
+                        packagingName: '',
+                        quantity: 0,
+                        isFromContract: false
+                    });
+                }
+
+                setDeliveryRows([...deliveryRows, ...newRows]);
+            };
+
+            const updateRow = (rowId, field, value) => {
+                // Jika field adalah contractId, auto-select produk kontrak pertama
+                const updatedRows = deliveryRows.map(row => {
+                    if (row.id === rowId) {
+                        const updated = { ...row, [field]: value };
+                        if (field === 'contractId' && value) {
+                            // Auto-select first product dari kontrak dan set storeName
+                            const contract = konsinyasiList.find(c => c.id === parseInt(value));
+                            if (contract) {
+                                updated.storeName = contract.storeName || '';
+                                if (contract.items.length > 0) {
+                                    const firstItem = contract.items[0];
+                                    updated.productId = firstItem.product?.id || '';
+                                    updated.productName = firstItem.product?.name || '';
+                                    
+                                    // Auto-select "Konsinyasi" packaging if available
+                                    const konsinyasiPackaging = firstItem.product?.packagings?.find(pkg => pkg.name?.toLowerCase() === 'konsinyasi');
+                                    const selectedPackaging = konsinyasiPackaging || firstItem.packaging || firstItem.product?.packagings?.[0];
+                                    updated.packagingId = selectedPackaging?.id || '';
+                                    updated.packagingName = selectedPackaging?.name || 'Satuan';
+                                    updated.isFromContract = true;
+                                }
+                            }
+                        }
+                        return updated;
+                    }
+                    return row;
+                });
+                setDeliveryRows(updatedRows);
+            };
+
+            const updateRowProduct = (rowId, productId) => {
+                const product = products.find(p => p.id === parseInt(productId));
+                // Auto-select "Konsinyasi" packaging if available, otherwise first packaging
+                const konsinyasiPackaging = product?.packagings?.find(pkg => pkg.name?.toLowerCase() === 'konsinyasi');
+                const selectedPackaging = konsinyasiPackaging || product?.packagings?.[0];
+                
+                setDeliveryRows(deliveryRows.map(row => 
+                    row.id === rowId ? { 
+                        ...row, 
+                        productId: productId, 
+                        productName: product?.name,
+                        packagingId: selectedPackaging?.id || '',
+                        packagingName: selectedPackaging?.name || 'Satuan'
+                    } : row
+                ));
+            };
+
+            const updateRowPackaging = (rowId, packagingId) => {
+                const allPackagings = products.flatMap(p => (p.packagings || []).map(pkg => ({...pkg, productId: p.id})));
+                const packaging = allPackagings.find(pkg => pkg.id === parseInt(packagingId));
+                setDeliveryRows(deliveryRows.map(row => 
+                    row.id === rowId ? { 
+                        ...row, 
+                        packagingId: packagingId, 
+                        packagingName: packaging?.name || 'Satuan'
+                    } : row
+                ));
+            };
+
+            const deleteRow = (rowId) => {
+                setDeliveryRows(deliveryRows.filter(row => row.id !== rowId));
+            };
+
+            const saveDeliveryPlan = async () => {
+                const validRows = deliveryRows.filter(r => r.deliveryDate && r.contractId && r.productId && r.quantity > 0);
+                if (validRows.length === 0) {
+                    MySwal.fire({title:'Info', text:'Isi minimal: Toko, Tanggal, Produk, dan Qty > 0', icon:'info'});
+                    return;
+                }
+
+                // Group by contractId to batch
+                const grouped = {};
+                validRows.forEach(row => {
+                    if (!grouped[row.contractId]) grouped[row.contractId] = [];
+                    grouped[row.contractId].push(row);
+                });
+
+                const promises = Object.entries(grouped).map(([contractId, rows]) => {
+                    const itemsByDate = {};
+                    rows.forEach(row => {
+                        if (!itemsByDate[row.deliveryDate]) itemsByDate[row.deliveryDate] = [];
+                        itemsByDate[row.deliveryDate].push({
+                            product_id: parseInt(row.productId),
+                            packaging_id: parseInt(row.packagingId) || null,
+                            quantity: parseInt(row.quantity)
+                        });
+                    });
+
+                    return Promise.all(Object.entries(itemsByDate).map(([dateKey, itemsPayload]) =>
+                        axios.post(`http://localhost:5000/api/konsinyasi/${contractId}/schedules`, {
+                            delivery_date: dateKey,
+                            notes: '',
+                            items: itemsPayload
+                        })
+                    ));
+                });
+
+                try {
+                    await Promise.all(promises.flat());
+                    MySwal.fire({title:'Berhasil!', text:`${validRows.length} item pengiriman telah dibuat.`, icon:'success'});
+                    setDeliveryRows([]);
+                    fetchKonsinyasi();
+                } catch (error) {
+                    MySwal.fire({title:'Gagal!', text: error.response?.data?.message || 'Terjadi kesalahan.', icon:'error'});
+                }
+            };
+
+            return (
+                <div className="animate-fade-up">
+                    <style>{`
+                        .drv-page { padding:.75rem; }
+                        .drv-header { margin-bottom:1.5rem; }
+                        .drv-header h2 { font-size:1.1rem; font-weight:800; margin:0 0 .3rem; }
+                        .drv-header p { font-size:.75rem; color:var(--text-muted); margin:0; }
+                        .drv-table-wrap { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:12px; overflow-x:auto; margin-bottom:1rem; }
+                        .drv-table { width:100%; border-collapse:collapse; font-size:.75rem; }
+                        .drv-table thead { position:sticky; top:0; background:linear-gradient(135deg,rgba(99,102,241,.1),rgba(168,85,247,.08)); border-bottom:1.5px solid var(--border-color); }
+                        .drv-table th { padding:.65rem; text-align:left; font-weight:700; color:var(--text-muted); font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; }
+                        .drv-table td { padding:.65rem; border-bottom:1px solid var(--border-color); }
+                        .drv-table tbody tr:hover { background:rgba(168,85,247,.04); }
+                        .drv-input { width:100%; padding:.4rem .5rem; background:#1e1b4b; color:#f0f0f0; border:1px solid var(--border-color); border-radius:5px; font-size:.75rem; font-weight:500; }
+                        .drv-input::placeholder { color:#9ca3af; }
+                        .drv-input:focus { outline:none; border-color:#a855f7; box-shadow:0 0 0 2px rgba(168,85,247,.1); }
+                        .drv-select { width:100%; padding:.4rem .5rem; background:#1e1b4b; color:#f0f0f0; border:1px solid var(--border-color); border-radius:5px; font-size:.75rem; font-weight:500; cursor:pointer; appearance:none; background-image:url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f0f0f0' stroke-width='2'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat:no-repeat; background-position:right .5rem center; background-size:1.2em; padding-right:1.8rem; }
+                        .drv-select:focus { outline:none; border-color:#a855f7; }
+                        .drv-select option { background:#1e1b4b; color:#f0f0f0; padding:.4rem; }
+                        .drv-select option:checked { background:linear-gradient(135deg,#4338ca,#7c3aed); color:#f0f0f0; }
+                        .drv-actions { display:flex; gap:.5rem; margin-top:1rem; flex-wrap:wrap; }
+                        .drv-btn { padding:.5rem 1rem; border-radius:8px; border:1.5px solid var(--border-color); background:transparent; font-weight:700; font-size:.75rem; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:.3rem; }
+                        .drv-btn:hover { opacity:.8; }
+                        .drv-btn-add { color:#818cf8; border-color:rgba(129,140,248,.3); background:rgba(129,140,248,.05); }
+                        .drv-btn-add:hover { background:rgba(129,140,248,.12); border-color:#818cf8; }
+                        .drv-btn-save { background:linear-gradient(135deg,#6366f1,#a855f7); color:#fff; border:none; }
+                        .drv-btn-save:hover { opacity:.9; }
+                        .drv-btn-del { color:#ef4444; border-color:rgba(239,68,68,.3); background:rgba(239,68,68,.05); }
+                        .drv-btn-del:hover { background:rgba(239,68,68,.15); border-color:#ef4444; }
+                        .drv-empty { text-align:center; padding:2rem; color:var(--text-muted); }
+                    `}</style>
+
+                    <div className="drv-page">
+                        <div className="drv-header">
+                            <h2>📅 Rencana Pengiriman Konsinyasi</h2>
+                            <p>Buat rencana pengiriman per toko dengan tanggal dan barang berbeda-beda</p>
+                        </div>
+
+                        {activeContracts.length === 0 ? (
+                            <div style={{ background: 'var(--bg-card)', border: '1.5px solid var(--border-color)', borderRadius: 12, padding: '2.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                <FileText size={48} style={{opacity:.2, marginBottom:'1rem'}} />
+                                <div style={{fontSize:'.95rem', fontWeight:600, marginBottom:'.5rem'}}>Belum ada kontrak pengiriman aktif</div>
+                                <div style={{fontSize:'.8rem', marginBottom:'1.5rem', color:'var(--text-muted)'}}>Buat kontrak konsinyasi dulu di "Daftar Konsinyasi" sebelum membuat rencana pengiriman.</div>
+                                <button 
+                                    onClick={() => setActiveTab('Daftar Konsinyasi')}
+                                    style={{
+                                        padding: '.6rem 1.5rem',
+                                        borderRadius: '8px',
+                                        background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                                        color: '#fff',
+                                        border: 'none',
+                                        fontWeight: '700',
+                                        fontSize: '.8rem',
+                                        cursor: 'pointer',
+                                        transition: 'all .2s',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '.5rem'
+                                    }}
+                                    onMouseEnter={e => e.target.style.opacity = '0.9'}
+                                    onMouseLeave={e => e.target.style.opacity = '1'}
+                                >
+                                    📋 Buat Kontrak Baru
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                {deliveryRows.length === 0 ? (
+                                    <div className="drv-empty">
+                                        <p style={{margin:'0 0 1rem 0'}}>Belum ada rencana pengiriman.</p>
+                                        <button className="drv-btn drv-btn-add" onClick={() => addDeliveryRow()}>
+                                            <Plus size={14} /> Tambah Rencana Pengiriman
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="drv-table-wrap">
+                                            <table className="drv-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th style={{width:'18%'}}>Tanggal</th>
+                                                        <th style={{width:'20%'}}>Toko</th>
+                                                        <th style={{width:'35%'}}>Produk</th>
+                                                        <th style={{width:'12%', textAlign:'center'}}>Qty</th>
+                                                        <th style={{width:'15%', textAlign:'center'}}>Aksi</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {deliveryRows.map(row => (
+                                                        <tr key={row.id}>
+                                                            <td>
+                                                                <input type="date" className="drv-input" value={row.deliveryDate} onChange={e => updateRow(row.id, 'deliveryDate', e.target.value)} />
+                                                            </td>
+                                                            <td>
+                                                                <select className="drv-select" value={row.contractId} onChange={e => updateRow(row.id, 'contractId', e.target.value)}>
+                                                                    <option value="">-- Pilih Toko --</option>
+                                                                    {activeContracts.map(c => <option key={c.id} value={c.id}>{c.storeName}</option>)}
+                                                                </select>
+                                                            </td>
+                                                            <td>
+                                                                <div style={{display:'flex', gap:'.3rem', flexDirection:'column'}}>
+                                                                    <select className="drv-select" value={row.productId} onChange={e => updateRowProduct(row.id, e.target.value)}>
+                                                                        <option value="">-- Pilih Produk --</option>
+                                                                        {row.contractId && (() => {
+                                                                            const contract = konsinyasiList.find(c => c.id === parseInt(row.contractId));
+                                                                            const contractProductIds = contract?.items.map(it => it.product?.id) || [];
+                                                                            const contractProds = products.filter(p => contractProductIds.includes(p.id));
+                                                                            const otherProds = products.filter(p => !contractProductIds.includes(p.id));
+                                                                            
+                                                                            return <>
+                                                                                {contractProds.map(p => <option key={`c-${p.id}`} value={p.id}>✓ {p.name}</option>)}
+                                                                                {otherProds.length > 0 && <option disabled>────── Produk Lain ──────</option>}
+                                                                                {otherProds.map(p => <option key={`o-${p.id}`} value={p.id}>{p.name}</option>)}
+                                                                            </>;
+                                                                        })()}
+                                                                        {!row.contractId && products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                                                    </select>
+                                                                    {row.productId && products.find(p => p.id === parseInt(row.productId))?.packagings?.length > 0 && (
+                                                                        <select className="drv-select" value={row.packagingId} onChange={e => updateRowPackaging(row.id, e.target.value)}>
+                                                                            <option value="">Satuan</option>
+                                                                            {products.find(p => p.id === parseInt(row.productId))?.packagings?.map(pkg => <option key={pkg.id} value={pkg.id}>{pkg.name}</option>)}
+                                                                        </select>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td style={{textAlign:'center'}}>
+                                                                <input type="number" className="drv-input" style={{textAlign:'center'}} min="0" value={row.quantity} onChange={e => updateRow(row.id, 'quantity', parseInt(e.target.value) || 0)} placeholder="0" />
+                                                            </td>
+                                                            <td style={{textAlign:'center'}}>
+                                                                <button className="drv-btn drv-btn-del" onClick={() => deleteRow(row.id)}>
+                                                                    <X size={14} />
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        <div className="drv-actions">
+                                            <button className="drv-btn drv-btn-add" onClick={() => addDeliveryRow()}>
+                                                <Plus size={14} /> Tambah Produk Lain
+                                            </button>
+                                            <button className="drv-btn drv-btn-add" onClick={() => {
+                                                if (activeContracts.length === 0) {
+                                                    MySwal.fire({title:'Info', text:'Belum ada toko aktif', icon:'info'});
+                                                    return;
+                                                }
+                                                const contractId = activeContracts[0].id;
+                                                addDeliveryRow(contractId);
+                                            }}>
+                                                <Plus size={14} /> Tambah Produk dari Toko
+                                            </button>
+                                            <button className="drv-btn drv-btn-save" onClick={saveDeliveryPlan}>
+                                                <CheckCircle2 size={14} /> Simpan Semua ({deliveryRows.length})
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </>
+                        )}
                     </div>
                 </div>
             );
@@ -2743,6 +3941,7 @@ const DashboardStokis = () => {
                     <div className="comm-tab-bar">
                         <button className={'comm-tab ' + (commTab === 'default' ? 'active' : '')} onClick={() => setCommTab('default')}>Komisi Default (Katalog)</button>
                         <button className={'comm-tab ' + (commTab === 'campaigns' ? 'active' : '')} onClick={() => setCommTab('campaigns')}>Kampanye Komisi</button>
+                        <button className={'comm-tab ' + (commTab === 'laporan' ? 'active' : '')} onClick={() => { setCommTab('laporan'); setSalesReportId(null); }}>Laporan Sales</button>
                     </div>
 
                     {commLoading ? (
@@ -2778,19 +3977,21 @@ const DashboardStokis = () => {
                                     </thead>
                                     <tbody>
                                         {commProducts.map(p => {
-                                            const cfg = pendingConfigs[p.id] || { isActive: false, commissionType: 'CUMULATIVE' };
+                                            const cfg = pendingConfigs[p.id] || { isActive: false, commissionType: 'CUMULATIVE', packagings: {} };
                                             const tiers = p.priceTiers || [];
                                             return (
-                                                <tr key={p.id}>
+                                                <React.Fragment key={p.id}>
+                                                <tr>
                                                     <td>
                                                         <div style={{fontWeight:800,color:'var(--text-main)'}}>{p.name}</div>
-                                                        <div style={{fontSize:'.72rem',color:'var(--text-muted)'}}>{p.code}</div>
+                                                        <div style={{fontSize:'.72rem',color:'var(--text-muted)',marginBottom:'.3rem'}}>{p.code}</div>
+                                                        <span style={{fontSize:'.65rem',fontWeight:800,color:'#818cf8',background:'rgba(99,102,241,0.12)',border:'1px solid rgba(99,102,241,0.25)',borderRadius:4,padding:'1px 7px'}}>Satuan / Unit</span>
                                                     </td>
                                                     <td>
-                                                        {tiers.length === 0
+                                                        {tiers.length === 0 && (p.packagings || []).length === 0
                                                             ? <span style={{color:'var(--text-muted)',fontSize:'.75rem'}}>Belum ada tier harga</span>
                                                             : tiers.map(t => (
-                                                                <div key={t.id} style={{fontSize:'.75rem',color:'var(--text-muted)',lineHeight:1.6}}>
+                                                                <div key={t.id} style={{fontSize:'.75rem',color:'var(--text-muted)',lineHeight:1.7}}>
                                                                     {t.level_name}: <strong style={{color:'#10b981'}}>Rp {t.commission.toLocaleString('id-ID')}</strong>
                                                                 </div>
                                                             ))
@@ -2808,13 +4009,45 @@ const DashboardStokis = () => {
                                                         </select>
                                                     </td>
                                                 </tr>
+                                                {/* Packaging sub-rows */}
+                                                {(p.packagings || []).filter(pkg => pkg.priceTiers && pkg.priceTiers.length > 0).map(pkg => {
+                                                    const pkgCfg = cfg.packagings?.[pkg.id] || { isActive: false, commissionType: 'CUMULATIVE' };
+                                                    return (
+                                                        <tr key={`pkg-${pkg.id}`}>
+                                                            <td style={{paddingLeft:'2rem'}}>
+                                                                <span style={{fontSize:'.68rem',fontWeight:800,color:'#10b981',background:'rgba(16,185,129,0.1)',border:'1px solid rgba(16,185,129,0.25)',borderRadius:5,padding:'2px 8px',display:'inline-flex',alignItems:'center',gap:4}}>
+                                                                    📦 {pkg.name} ({pkg.unitQty} unit)
+                                                                </span>
+                                                            </td>
+                                                            <td>
+                                                                {pkg.priceTiers.map(pt => (
+                                                                    <div key={pt.id} style={{fontSize:'.75rem',color:'var(--text-muted)',lineHeight:1.7}}>
+                                                                        {pt.level_name}: <strong style={{color:'#34d399'}}>Rp {pt.commission.toLocaleString('id-ID')}</strong>
+                                                                    </div>
+                                                                ))}
+                                                            </td>
+                                                            <td style={{textAlign:'center'}}>
+                                                                <span className="comm-toggle" onClick={() => setPendingConfigs(pc => ({ ...pc, [p.id]: { ...pc[p.id], packagings: { ...pc[p.id].packagings, [pkg.id]: { ...pkgCfg, isActive: !pkgCfg.isActive } } } }))} title={pkgCfg.isActive ? 'Klik untuk nonaktifkan' : 'Klik untuk aktifkan'}>
+                                                                    {pkgCfg.isActive ? <ToggleRight size={28} color="#10b981" /> : <ToggleLeft size={28} color="var(--text-muted)" />}
+                                                                </span>
+                                                            </td>
+                                                            <td>
+                                                                <select className="comm-select" value={pkgCfg.commissionType} disabled={!pkgCfg.isActive} onChange={e => setPendingConfigs(pc => ({ ...pc, [p.id]: { ...pc[p.id], packagings: { ...pc[p.id].packagings, [pkg.id]: { ...pkgCfg, commissionType: e.target.value } } } }))}>
+                                                                    <option value="CUMULATIVE">Kumulatif (setiap pembelian)</option>
+                                                                    <option value="FIRST_PURCHASE">Hanya pembelian pertama</option>
+                                                                </select>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                </React.Fragment>
                                             );
                                         })}
                                     </tbody>
                                 </table>
                             )}
                         </>
-                    ) : (
+                    ) : commTab === 'campaigns' ? (
                         <>
                             <div style={{marginBottom:'1rem',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'.5rem'}}>
                                 <p style={{margin:0,fontSize:'.82rem',color:'var(--text-muted)'}}>Buat kampanye komisi tambahan di luar komisi default. Kampanye bisa digabung dengan komisi default atau berdiri sendiri.</p>
@@ -2856,7 +4089,97 @@ const DashboardStokis = () => {
                                 ))
                             )}
                         </>
-                    )}
+                    ) : commTab === 'laporan' ? (
+                        <>
+                            {commSalesTeam.length === 0 ? (
+                                <div style={{textAlign:'center',padding:'3rem',color:'var(--text-muted)',background:'var(--bg-card)',borderRadius:14,border:'1.5px solid var(--border-color)'}}>Belum ada anggota Sales. Tambahkan Sales di menu Manajemen Tim.</div>
+                            ) : (
+                                <div style={{display:'flex',flexDirection:'column',gap:'.85rem'}}>
+                                    {commSalesTeam.map(s => {
+                                        const totalComm = salesCommissionMap[s.id] || 0;
+                                        const consumerCount = salesConsumerMap[s.id] || 0;
+                                        const isExpanded = salesReportId === s.id;
+                                        return (
+                                            <div key={s.id} style={{background:'var(--bg-card)',border:`1.5px solid ${isExpanded ? '#6366f1' : 'var(--border-color)'}`,borderRadius:14,padding:'1.1rem 1.25rem',transition:'border-color .15s'}}>
+                                                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.75rem',flexWrap:'wrap'}}>
+                                                    <div style={{display:'flex',alignItems:'center',gap:'.85rem'}}>
+                                                        <div style={{width:44,height:44,borderRadius:'50%',background:'rgba(99,102,241,.15)',border:'1.5px solid rgba(129,140,248,.3)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:'.88rem',color:'#818cf8',flexShrink:0}}>{s.name.substring(0,2).toUpperCase()}</div>
+                                                        <div>
+                                                            <div style={{fontWeight:800,fontSize:'.9rem'}}>{s.name}</div>
+                                                            <div style={{fontSize:'.72rem',color:'var(--text-muted)',marginTop:2}}>{s.email}{s.contact ? ` · ${s.contact}` : ''}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div style={{display:'flex',alignItems:'center',gap:'1.5rem',flexWrap:'wrap'}}>
+                                                        <div style={{textAlign:'center'}}>
+                                                            <div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text-muted)',marginBottom:'.2rem'}}>Total Komisi</div>
+                                                            <div style={{fontWeight:800,fontSize:'1rem',color:'#818cf8'}}>Rp {totalComm.toLocaleString('id-ID')}</div>
+                                                        </div>
+                                                        <div style={{textAlign:'center'}}>
+                                                            <div style={{fontSize:'.68rem',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text-muted)',marginBottom:'.2rem'}}>Konsumen</div>
+                                                            <div style={{fontWeight:800,fontSize:'1rem'}}>{consumerCount}</div>
+                                                        </div>
+                                                        <button onClick={() => fetchSalesReport(s.id)} style={{display:'flex',alignItems:'center',gap:'.4rem',padding:'.5rem 1rem',borderRadius:9,border:`1.5px solid ${isExpanded ? '#6366f1' : 'var(--border-color)'}`,background:isExpanded ? 'rgba(99,102,241,.1)' : 'transparent',color:isExpanded ? '#818cf8' : 'var(--text-muted)',fontWeight:700,fontSize:'.8rem',cursor:'pointer',transition:'all .15s'}}>
+                                                            {isExpanded ? 'Tutup' : 'Lihat Detail'}
+                                                            <ChevronDown size={14} style={{transform:isExpanded ? 'rotate(180deg)' : 'none',transition:'transform .2s'}} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {isExpanded && (
+                                                    <div style={{marginTop:'1.1rem',paddingTop:'1.1rem',borderTop:'1px solid var(--border-color)'}}>
+                                                        {salesReportLoading ? (
+                                                            <div style={{textAlign:'center',padding:'1.5rem',color:'var(--text-muted)',fontSize:'.85rem'}}>Memuat data...</div>
+                                                        ) : (
+                                                            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.5rem'}}>
+                                                                <div>
+                                                                    <div style={{fontWeight:800,fontSize:'.85rem',marginBottom:'.5rem',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                                                                        <span>🧾 Riwayat Order ({salesReportData.orders.length})</span>
+                                                                        <span style={{color:'#818cf8',fontWeight:700,fontSize:'.8rem'}}>Rp {salesReportData.grandTotalCommission.toLocaleString('id-ID')}</span>
+                                                                    </div>
+                                                                    {salesReportData.orders.length === 0 ? (
+                                                                        <div style={{textAlign:'center',padding:'1rem',color:'var(--text-muted)',fontSize:'.78rem',border:'1px dashed var(--border-color)',borderRadius:9}}>Belum ada order selesai.</div>
+                                                                    ) : (
+                                                                        <div style={{maxHeight:240,overflowY:'auto',display:'flex',flexDirection:'column',gap:'.35rem'}}>
+                                                                            {salesReportData.orders.map(o => (
+                                                                                <div key={o.orderId} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'.55rem .75rem',borderRadius:9,border:'1px solid var(--border-color)',background:'rgba(255,255,255,.01)'}}>
+                                                                                    <div>
+                                                                                        <div style={{fontWeight:700,fontSize:'.78rem',fontFamily:'Courier New,monospace'}}>{o.invoice_id}</div>
+                                                                                        <div style={{fontSize:'.68rem',color:'var(--text-muted)',marginTop:'.1rem'}}>{new Date(o.date).toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'})} · {o.buyerName}</div>
+                                                                                    </div>
+                                                                                    <div style={{fontWeight:800,fontSize:'.82rem',color:'#818cf8',fontFamily:'Courier New,monospace'}}>+Rp {o.totalCommission.toLocaleString('id-ID')}</div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div>
+                                                                    <div style={{fontWeight:800,fontSize:'.85rem',marginBottom:'.5rem'}}>👤 Konsumen Terdaftar ({salesReportData.consumers.length})</div>
+                                                                    {salesReportData.consumers.length === 0 ? (
+                                                                        <div style={{textAlign:'center',padding:'1rem',color:'var(--text-muted)',fontSize:'.78rem',border:'1px dashed var(--border-color)',borderRadius:9}}>Belum ada konsumen terdaftar.</div>
+                                                                    ) : (
+                                                                        <div style={{maxHeight:240,overflowY:'auto',display:'flex',flexDirection:'column',gap:'.35rem'}}>
+                                                                            {salesReportData.consumers.map(c => (
+                                                                                <div key={c.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'.55rem .75rem',borderRadius:9,border:'1px solid var(--border-color)',background:'rgba(255,255,255,.01)'}}>
+                                                                                    <div>
+                                                                                        <div style={{fontWeight:700,fontSize:'.78rem'}}>{c.name}</div>
+                                                                                        <div style={{fontSize:'.68rem',color:'var(--text-muted)',marginTop:'.1rem'}}><span style={{background:'rgba(99,102,241,.1)',color:'#818cf8',borderRadius:4,padding:'1px 5px',fontSize:'.65rem',fontWeight:700}}>{c.role}</span> · {c.email}</div>
+                                                                                    </div>
+                                                                                    <div style={{fontSize:'.68rem',color:'var(--text-muted)',whiteSpace:'nowrap'}}>{new Date(c.createdAt).toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'})}</div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </>
+                    ) : null}
 
                     {showCampaignModal && (
                         <div className="comm-inline-form">
@@ -3152,6 +4475,67 @@ const DashboardStokis = () => {
                                     style={{ marginTop: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(129,140,248,0.07)', border: '1px dashed rgba(129,140,248,0.25)', borderRadius: 8, color: '#818cf8', fontSize: '0.78rem', fontWeight: 600, padding: '0.45rem 0.85rem', cursor: 'pointer', fontFamily: 'inherit', transition: 'background 0.15s' }}>
                                     <Plus size={13} /> Tambah Tier Harga
                                 </button>
+
+                                {/* ── Packaging Section ── */}
+                                <div style={{ marginTop: '1.75rem', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '1.25rem' }}>
+                                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.75rem' }}>
+                                        <div>
+                                            <div style={{ fontSize:'0.7rem', fontWeight:700, letterSpacing:'0.08em', textTransform:'uppercase', color:'rgba(161,161,170,0.7)' }}>Kemasan / Satuan Bundel</div>
+                                            <div style={{ fontSize:'0.72rem', color:'var(--text-muted)', marginTop:2 }}>Opsional. Atur harga khusus per satuan bundel (Dus, Karton, dll) sesuai tier harga.</div>
+                                        </div>
+                                        <button onClick={addPackaging} style={{ display:'inline-flex', alignItems:'center', gap:'0.35rem', background:'rgba(16,185,129,0.07)', border:'1px dashed rgba(16,185,129,0.3)', borderRadius:8, color:'#10b981', fontSize:'0.78rem', fontWeight:600, padding:'0.45rem 0.85rem', cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
+                                            <Plus size={13} /> Tambah Kemasan
+                                        </button>
+                                    </div>
+
+                                    {formPackagings.length === 0 ? (
+                                        <div style={{ fontSize:'0.78rem', color:'var(--text-muted)', textAlign:'center', padding:'0.85rem', border:'1px dashed rgba(255,255,255,0.07)', borderRadius:8 }}>
+                                            Belum ada kemasan. Produk hanya dijual satuan (unit).
+                                        </div>
+                                    ) : (
+                                        <div style={{ display:'flex', flexDirection:'column', gap:'0.85rem' }}>
+                                            {formPackagings.map((pkg, pkgIdx) => (
+                                                <div key={pkgIdx} style={{ background:'rgba(16,185,129,0.04)', border:'1px solid rgba(16,185,129,0.15)', borderRadius:10, padding:'0.85rem 1rem' }}>
+                                                    {/* Packaging header row */}
+                                                    <div style={{ display:'grid', gridTemplateColumns:'1fr 120px auto 32px', gap:'0.6rem', alignItems:'center', marginBottom:'0.75rem' }}>
+                                                        <div>
+                                                            <div style={{ fontSize:'0.62rem', fontWeight:700, textTransform:'uppercase', color:'rgba(161,161,170,0.5)', marginBottom:3 }}>Nama Kemasan</div>
+                                                            <input type="text" className="modal-input" style={{ fontSize:'0.83rem' }} placeholder="Cth: Dus, Karton, Lusin" value={pkg.name} onChange={e => updatePackaging(pkgIdx, 'name', e.target.value)} />
+                                                        </div>
+                                                        <div>
+                                                            <div style={{ fontSize:'0.62rem', fontWeight:700, textTransform:'uppercase', color:'rgba(161,161,170,0.5)', marginBottom:3 }}>Isi (Unit)</div>
+                                                            <input type="number" className="modal-input" style={{ fontSize:'0.83rem', fontFamily:'monospace', textAlign:'right' }} placeholder="12" value={pkg.unitQty} onChange={e => updatePackaging(pkgIdx, 'unitQty', e.target.value)} />
+                                                        </div>
+                                                        <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', fontSize:'0.78rem', color:'var(--text-muted)', userSelect:'none', whiteSpace:'nowrap' }}>
+                                                            <input type="checkbox" style={{ width:15, height:15, accentColor:'#10b981', cursor:'pointer' }} checked={!!pkg.isDefault} onChange={e => updatePackaging(pkgIdx, 'isDefault', e.target.checked)} />
+                                                            Default
+                                                        </label>
+                                                        <button onClick={() => removePackaging(pkgIdx)} style={{ width:32, height:32, display:'flex', alignItems:'center', justifyContent:'center', borderRadius:7, background:'rgba(239,68,68,0.07)', border:'1px solid rgba(239,68,68,0.15)', color:'#f87171', cursor:'pointer', flexShrink:0 }}>
+                                                            <X size={14} />
+                                                        </button>
+                                                    </div>
+                                                    {/* Per-tier prices for this packaging */}
+                                                    {pkg.priceTiers.length > 0 && (
+                                                        <>
+                                                            <div style={{ display:'grid', gridTemplateColumns:'1fr 140px 140px', gap:'0.5rem', padding:'0 0 0.4rem', borderBottom:'1px solid rgba(255,255,255,0.05)', marginBottom:'0.45rem' }}>
+                                                                <div style={{ fontSize:'0.6rem', fontWeight:700, letterSpacing:'0.1em', textTransform:'uppercase', color:'rgba(161,161,170,0.35)' }}>Tier</div>
+                                                                <div style={{ fontSize:'0.6rem', fontWeight:700, letterSpacing:'0.1em', textTransform:'uppercase', color:'rgba(161,161,170,0.35)', textAlign:'right' }}>Harga / Kemasan (Rp)</div>
+                                                                <div style={{ fontSize:'0.6rem', fontWeight:700, letterSpacing:'0.1em', textTransform:'uppercase', color:'#818cf8', textAlign:'right' }}>Komisi / Kemasan (Rp)</div>
+                                                            </div>
+                                                            {pkg.priceTiers.map((pt, tIdx) => (
+                                                                <div key={tIdx} style={{ display:'grid', gridTemplateColumns:'1fr 140px 140px', gap:'0.5rem', alignItems:'center', marginBottom:'0.35rem' }}>
+                                                                    <div style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text-muted)', paddingLeft:2 }}>{pt.level_name || `Tier ${tIdx+1}`}</div>
+                                                                    <input type="number" className="modal-input" style={{ fontSize:'0.83rem', fontFamily:'monospace', textAlign:'right' }} placeholder="0" value={pt.price} onChange={e => updatePackagingTier(pkgIdx, tIdx, 'price', e.target.value)} />
+                                                                    <input type="number" className="modal-input" style={{ fontSize:'0.83rem', fontFamily:'monospace', textAlign:'right', borderColor:'rgba(129,140,248,0.25)', color:'#a5b4fc' }} placeholder="0" value={pt.commission} onChange={e => updatePackagingTier(pkgIdx, tIdx, 'commission', e.target.value)} />
+                                                                </div>
+                                                            ))}
+                                                        </>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="modal-footer">
@@ -3235,6 +4619,230 @@ const DashboardStokis = () => {
                     </div>
                 )
             }
+
+            {/* KONSINYASI CONTRACT MODAL */}
+            {showKonsinyasiModal && (
+                <div className="modal-overlay animate-fade-up" onClick={e => e.target === e.currentTarget && setShowKonsinyasiModal(false)}>
+                    <div className="modal-content animate-fade-up" style={{ maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto' }}>
+                        <div style={{ background: 'linear-gradient(135deg,#0f1729,#1a2040)', borderBottom: '1.5px solid rgba(99,102,241,.25)', padding: '1.25rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 2 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '.9rem' }}>
+                                <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(99,102,241,.2)', border: '1.5px solid rgba(99,102,241,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={18} color="#818cf8" /></div>
+                                <div>
+                                    <div style={{ fontWeight: 800, fontSize: '.95rem' }}>{editingKonsinyasi ? 'Edit Kontrak Konsinyasi' : 'Buat Kontrak Konsinyasi Baru'}</div>
+                                    <div style={{ fontSize: '.72rem', color: 'var(--text-muted)' }}>Isi data KYC dan produk titipan</div>
+                                </div>
+                            </div>
+                            <button onClick={() => setShowKonsinyasiModal(false)} style={{ background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                        </div>
+                        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                            {/* Konsumen picker */}
+                            <div>
+                                <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Konsumen Terdaftar *</div>
+                                <select className="modal-input" value={kForm.konsumenId} onChange={async (e) => {
+                                    const k = konsumenList.find(k => k.id === parseInt(e.target.value));
+                                    console.log('[DEBUG] Konsumen selected:', { value: e.target.value, konsumen: k });
+                                    
+                                    setKForm(f => ({
+                                        ...f,
+                                        konsumenId: e.target.value,
+                                        storeName: k?.store_name || f.storeName,
+                                        storeAddress: k?.address || f.storeAddress,
+                                        storePhone: k?.contact || f.storePhone,
+                                        ownerName: k?.name || f.ownerName
+                                    }));
+                                    
+                                    // Re-fetch prices for all existing items with new konsumen
+                                    if (e.target.value && kForm.items.length > 0) {
+                                        const updatedItems = [...kForm.items];
+                                        for (let idx = 0; idx < updatedItems.length; idx++) {
+                                            const item = updatedItems[idx];
+                                            if (item.productId) {
+                                                const price = await fetchDefaultKonsinyasiPrice(item.productId, item.packagingId, e.target.value);
+                                                updatedItems[idx].priceKonsinyasi = String(price);
+                                            }
+                                        }
+                                        setKForm(f => ({ ...f, items: updatedItems }));
+                                    }
+                                }}>
+                                    <option value="">— Pilih Konsumen —</option>
+                                    {konsumenList.map(k => <option key={k.id} value={k.id}>{k.name} {k.store_name ? `— ${k.store_name}` : ''}</option>)}
+                                </select>
+                            </div>
+                            {/* KYC Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem' }}>
+                                {[
+                                    { key: 'ownerName', label: 'Nama Pemilik *', placeholder: 'Budi Santoso' },
+                                    { key: 'storeName', label: 'Nama Toko *', placeholder: 'Warung Bu Budi' },
+                                    { key: 'storePhone', label: 'No. HP', placeholder: '08xxxxxxxx' },
+                                    { key: 'idCardNo', label: 'NIK KTP', placeholder: '32xxxxxxxxxxxxxx' },
+                                    { key: 'npwpNo', label: 'NPWP (opsional)', placeholder: 'xx.xxx.xxx.x-xxx.xxx' },
+                                ].map(f => (
+                                    <div key={f.key}>
+                                        <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>{f.label}</div>
+                                        <input type="text" className="modal-input" placeholder={f.placeholder} value={kForm[f.key]} onChange={e => setKForm(p => ({ ...p, [f.key]: e.target.value }))} />
+                                    </div>
+                                ))}
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Alamat Toko *</div>
+                                    <input type="text" className="modal-input" placeholder="Jl. Merdeka No. 10, Bandung" value={kForm.storeAddress} onChange={e => setKForm(p => ({ ...p, storeAddress: e.target.value }))} />
+                                </div>
+                            </div>
+                            {/* Billing & dates */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '.75rem' }}>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Siklus Tagihan</div>
+                                    <select className="modal-input" value={kForm.billingCycle} onChange={e => setKForm(p => ({ ...p, billingCycle: e.target.value }))}>
+                                        <option value="WEEKLY">Mingguan</option>
+                                        <option value="MONTHLY">Bulanan</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Tgl Mulai</div>
+                                    <input type="date" className="modal-input" value={kForm.startDate} onChange={e => setKForm(p => ({ ...p, startDate: e.target.value }))} />
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Tgl Berakhir</div>
+                                    <input type="date" className="modal-input" value={kForm.endDate} onChange={e => setKForm(p => ({ ...p, endDate: e.target.value }))} />
+                                </div>
+                            </div>
+                            {/* Notes */}
+                            <div>
+                                <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Catatan Kontrak</div>
+                                <textarea className="modal-input" rows={2} placeholder="Syarat & ketentuan, catatan khusus..." value={kForm.notes} onChange={e => setKForm(p => ({ ...p, notes: e.target.value }))} style={{ resize: 'vertical' }} />
+                            </div>
+                            {/* Products */}
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.65rem' }}>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)' }}>Produk Titipan</div>
+                                    <button className="btn btn-secondary py-1 text-xs" onClick={() => setKForm(p => ({ ...p, items: [...p.items, { productId: '', packagingId: '', priceKonsinyasi: '', maxQtyPerDelivery: '0' }] }))}>+ Tambah Produk</button>
+                                </div>
+                                {kForm.items.length === 0 && <div style={{ textAlign: 'center', padding: '1rem', border: '1.5px dashed var(--border-color)', borderRadius: 8, color: 'var(--text-muted)', fontSize: '.8rem' }}>Belum ada produk. Klik "+ Tambah Produk"</div>}
+                                {kForm.items.map((it, idx) => {
+                                    const selProd = products.find(p => p.id === parseInt(it.productId));
+                                    const handleProductChange = async (e) => {
+                                        const items = [...kForm.items];
+                                        items[idx].productId = e.target.value;
+                                        items[idx].packagingId = '';
+                                        setKForm(p => ({ ...p, items }));
+                                        
+                                        // Fetch and auto-populate default price for satuan unit (sesuai tier konsumen)
+                                        if (e.target.value && kForm.konsumenId) {
+                                            const defaultPrice = await fetchDefaultKonsinyasiPrice(e.target.value, '', kForm.konsumenId);
+                                            const updatedItems = [...kForm.items];
+                                            updatedItems[idx].priceKonsinyasi = String(defaultPrice);
+                                            setKForm(p => ({ ...p, items: updatedItems }));
+                                        }
+                                    };
+                                    
+                                    const handlePackagingChange = async (e) => {
+                                        const items = [...kForm.items];
+                                        items[idx].packagingId = e.target.value;
+                                        setKForm(p => ({ ...p, items }));
+                                        
+                                        // Fetch and auto-populate default price for selected packaging (sesuai tier konsumen)
+                                        if (it.productId && e.target.value && kForm.konsumenId) {
+                                            const defaultPrice = await fetchDefaultKonsinyasiPrice(it.productId, e.target.value, kForm.konsumenId);
+                                            const updatedItems = [...kForm.items];
+                                            updatedItems[idx].priceKonsinyasi = String(defaultPrice);
+                                            setKForm(p => ({ ...p, items: updatedItems }));
+                                        }
+                                    };
+                                    
+                                    return (
+                                        <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 120px 100px 36px', gap: '.5rem', marginBottom: '.5rem', alignItems: 'end' }}>
+                                            <div>
+                                                {idx === 0 && <div style={{ fontSize: '.62rem', color: 'var(--text-muted)', marginBottom: '.25rem', fontWeight: 700 }}>PRODUK</div>}
+                                                <select className="modal-input" value={it.productId} onChange={handleProductChange}>
+                                                    <option value="">— Pilih —</option>
+                                                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                {idx === 0 && <div style={{ fontSize: '.62rem', color: 'var(--text-muted)', marginBottom: '.25rem', fontWeight: 700 }}>VARIAN</div>}
+                                                <select className="modal-input" value={it.packagingId} onChange={handlePackagingChange}>
+                                                    <option value="">Satuan Unit</option>
+                                                    {(selProd?.packagings || []).map(pk => <option key={pk.id} value={pk.id}>📦 {pk.name} ({pk.unitQty} unit)</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                {idx === 0 && <div style={{ fontSize: '.62rem', color: 'var(--text-muted)', marginBottom: '.25rem', fontWeight: 700 }}>HARGA TITIPAN</div>}
+                                                <input type="number" className="modal-input" placeholder="0" value={it.priceKonsinyasi} onChange={e => { const items = [...kForm.items]; items[idx].priceKonsinyasi = e.target.value; setKForm(p => ({ ...p, items })); }} />
+                                            </div>
+                                            <div>
+                                                {idx === 0 && <div style={{ fontSize: '.62rem', color: 'var(--text-muted)', marginBottom: '.25rem', fontWeight: 700 }}>MAX QTY/KIRIM</div>}
+                                                <input type="number" className="modal-input" placeholder="0=bebas" value={it.maxQtyPerDelivery} onChange={e => { const items = [...kForm.items]; items[idx].maxQtyPerDelivery = e.target.value; setKForm(p => ({ ...p, items })); }} />
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                                                <button onClick={() => setKForm(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))} style={{ height: 38, width: 36, borderRadius: 8, border: '1.5px solid rgba(239,68,68,.25)', background: 'rgba(239,68,68,.07)', color: '#f87171', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={14} /></button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button onClick={() => setShowKonsinyasiModal(false)} className="btn btn-secondary">Batal</button>
+                            <button onClick={saveKonsinyasi} className="btn btn-primary font-bold">{editingKonsinyasi ? 'Simpan Perubahan' : 'Buat Kontrak'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* KONSINYASI SCHEDULE MODAL */}
+            {showScheduleModal && (() => {
+                const contract = konsinyasiList.find(c => c.id === scheduleContractId);
+                return (
+                    <div className="modal-overlay animate-fade-up" onClick={e => e.target === e.currentTarget && setShowScheduleModal(false)}>
+                        <div className="modal-content animate-fade-up" style={{ maxWidth: '560px' }}>
+                            <div style={{ background: 'linear-gradient(135deg,#0b2316,#14532d)', borderBottom: '1.5px solid rgba(34,197,94,.2)', padding: '1.25rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '.9rem' }}>
+                                    <div style={{ width: 40, height: 40, borderRadius: 11, background: 'rgba(34,197,94,.15)', border: '1.5px solid rgba(34,197,94,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CalendarDays size={18} color="#22c55e" /></div>
+                                    <div>
+                                        <div style={{ fontWeight: 800, fontSize: '.95rem' }}>Tambah Jadwal Pengiriman</div>
+                                        <div style={{ fontSize: '.72rem', color: 'rgba(34,197,94,.7)' }}>{contract?.storeName} — {contract?.contractNo}</div>
+                                    </div>
+                                </div>
+                                <button onClick={() => setShowScheduleModal(false)} style={{ background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                            </div>
+                            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '.9rem' }}>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Tanggal Pengiriman *</div>
+                                    <input type="date" className="modal-input" value={scheduleForm.deliveryDate} onChange={e => setScheduleForm(f => ({ ...f, deliveryDate: e.target.value }))} />
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.4rem' }}>Catatan</div>
+                                    <input type="text" className="modal-input" placeholder="Opsional..." value={scheduleForm.notes} onChange={e => setScheduleForm(f => ({ ...f, notes: e.target.value }))} />
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', marginBottom: '.65rem' }}>Qty per Produk</div>
+                                    {scheduleForm.items.map((si, idx) => {
+                                        const contractItem = contract?.items.find(ci => ci.productId === parseInt(si.productId) && (ci.packagingId || null) === (si.packagingId ? parseInt(si.packagingId) : null));
+                                        return (
+                                            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '.75rem', marginBottom: '.55rem', padding: '.65rem .85rem', border: '1.5px solid var(--border-color)', borderRadius: 9 }}>
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{ fontWeight: 700, fontSize: '.83rem' }}>{contractItem?.product?.name}</div>
+                                                    <div style={{ fontSize: '.7rem', color: 'var(--text-muted)' }}>
+                                                        {contractItem?.packaging ? `📦 ${contractItem.packaging.name}` : 'Satuan'} · Harga: Rp {Number(contractItem?.priceKonsinyasi || 0).toLocaleString('id-ID')}
+                                                        {contractItem?.maxQtyPerDelivery > 0 && ` · Max: ${contractItem.maxQtyPerDelivery}`}
+                                                    </div>
+                                                </div>
+                                                <input type="number" min="0" className="modal-input" style={{ width: 80 }} placeholder="0" value={si.quantity} onChange={e => { const items = [...scheduleForm.items]; items[idx].quantity = e.target.value; setScheduleForm(f => ({ ...f, items })); }} />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                <div style={{ fontSize: '.75rem', color: 'var(--text-muted)', padding: '.75rem', borderRadius: 9, background: 'rgba(34,197,94,.05)', border: '1px solid rgba(34,197,94,.15)' }}>
+                                    ✅ Jadwal ini akan <strong style={{ color: '#22c55e' }}>otomatis membuat pesanan</strong> di tab Distribusi dan terlihat sebagai pesanan konsinyasi di aplikasi konsumen.
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button onClick={() => setShowScheduleModal(false)} className="btn btn-secondary">Batal</button>
+                                <button onClick={saveSchedule} className="btn btn-primary font-bold">Buat Jadwal & Pesanan</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* DYNAMIC REACT MODAL: ADD TEAM MEMBER */}
             {
@@ -3468,36 +5076,65 @@ const DashboardStokis = () => {
                                         const override = pricingOverrides.find(p => p.productId === product.id);
                                         const currentValue = override ? override.level_name : '';
                                         return (
-                                            <div key={product.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', padding: '1rem 1.4rem', borderBottom: idx < products.length - 1 ? '1px solid var(--border-color)' : 'none', alignItems: 'center', gap: '1rem', transition: 'background .15s' }}
+                                            <div key={product.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', padding: '1rem 1.4rem', borderBottom: idx < products.length - 1 ? '1px solid var(--border-color)' : 'none', alignItems: 'start', gap: '1rem', transition: 'background .15s' }}
                                                 onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
                                                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                                                 {/* Product info */}
-                                                <div>
+                                                <div style={{ paddingTop: 2 }}>
                                                     <div style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--text-main)' }}>{product.name}</div>
                                                     <div style={{ display: 'inline-block', marginTop: 4, fontSize: '0.68rem', fontFamily: 'monospace', background: 'var(--bg-hover)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '1px 7px', color: 'var(--text-muted)' }}>{product.code}</div>
                                                 </div>
-                                                {/* Clickable tier chips */}
-                                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                                    {product.priceTiers?.map(pt => {
-                                                        const selected = currentValue === pt.level_name;
-                                                        return (
-                                                            <div key={pt.id}
-                                                                onClick={() => handlePricingChange(product.id, selected ? '' : pt.level_name)}
-                                                                style={{
-                                                                    borderRadius: 9, padding: '0.35rem 0.7rem', cursor: 'pointer', transition: 'all .15s', position: 'relative',
-                                                                    background: selected ? 'rgba(129,140,248,0.18)' : 'rgba(129,140,248,0.05)',
-                                                                    border: selected ? '1.5px solid #818cf8' : '1.5px solid rgba(129,140,248,0.2)',
-                                                                    boxShadow: selected ? '0 0 0 3px rgba(129,140,248,0.12)' : 'none',
-                                                                    transform: selected ? 'translateY(-1px)' : 'none',
-                                                                }}>
-                                                                {selected && (
-                                                                    <div style={{ position: 'absolute', top: -7, right: -7, width: 16, height: 16, borderRadius: '50%', background: '#818cf8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.6rem', color: '#fff', fontWeight: 900 }}>✓</div>
-                                                                )}
-                                                                <div style={{ fontSize: '0.65rem', fontWeight: 700, color: selected ? '#818cf8' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{pt.level_name}</div>
-                                                                <div style={{ fontSize: '0.78rem', color: selected ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: selected ? 700 : 500, marginTop: 2 }}>Rp {Number(pt.price).toLocaleString('id-ID')}</div>
-                                                            </div>
-                                                        );
-                                                    })}
+                                                <div>
+                                                    {/* Clickable tier chips */}
+                                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                        {product.priceTiers?.map(pt => {
+                                                            const selected = currentValue === pt.level_name;
+                                                            return (
+                                                                <div key={pt.id}
+                                                                    onClick={() => handlePricingChange(product.id, selected ? '' : pt.level_name)}
+                                                                    style={{
+                                                                        borderRadius: 9, padding: '0.35rem 0.7rem', cursor: 'pointer', transition: 'all .15s', position: 'relative',
+                                                                        background: selected ? 'rgba(129,140,248,0.18)' : 'rgba(129,140,248,0.05)',
+                                                                        border: selected ? '1.5px solid #818cf8' : '1.5px solid rgba(129,140,248,0.2)',
+                                                                        boxShadow: selected ? '0 0 0 3px rgba(129,140,248,0.12)' : 'none',
+                                                                        transform: selected ? 'translateY(-1px)' : 'none',
+                                                                    }}>
+                                                                    {selected && (
+                                                                        <div style={{ position: 'absolute', top: -7, right: -7, width: 16, height: 16, borderRadius: '50%', background: '#818cf8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.6rem', color: '#fff', fontWeight: 900 }}>✓</div>
+                                                                    )}
+                                                                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: selected ? '#818cf8' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{pt.level_name}</div>
+                                                                    <div style={{ fontSize: '0.78rem', color: selected ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: selected ? 700 : 500, marginTop: 2 }}>Rp {Number(pt.price).toLocaleString('id-ID')}</div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+
+                                                    {/* Packaging tier selector */}
+                                                    {product.packagings?.length > 0 && (
+                                                        <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.55rem', borderTop: '1px dashed rgba(16,185,129,0.2)', paddingTop: '0.65rem' }}>
+                                                            <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '.07em' }}>📦 Tier Kemasan</span>
+                                                            {product.packagings.map(pkg => {
+                                                                const currentPkgTier = packagingOverrides.find(p => p.packagingId === pkg.id)?.level_name || '';
+                                                                return (
+                                                                    <div key={pkg.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                                        <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#10b981', whiteSpace: 'nowrap', minWidth: '6rem' }}>
+                                                                            {pkg.name} <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>({pkg.unitQty} unit)</span>
+                                                                        </span>
+                                                                        {pkg.priceTiers?.length > 0 ? pkg.priceTiers.map(pt => {
+                                                                            const sel = currentPkgTier === pt.level_name;
+                                                                            return (
+                                                                                <div key={pt.id} onClick={() => handlePackagingTierChange(pkg.id, sel ? '' : pt.level_name)} style={{ position: 'relative', borderRadius: 8, padding: '0.25rem 0.6rem', cursor: 'pointer', transition: 'all .15s', background: sel ? 'rgba(16,185,129,0.18)' : 'rgba(16,185,129,0.04)', border: sel ? '1.5px solid #10b981' : '1.5px solid rgba(16,185,129,0.2)', boxShadow: sel ? '0 0 0 3px rgba(16,185,129,0.12)' : 'none' }}>
+                                                                                    {sel && <div style={{ position: 'absolute', top: -6, right: -6, width: 14, height: 14, borderRadius: '50%', background: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.55rem', color: '#fff', fontWeight: 900 }}>✓</div>}
+                                                                                    <div style={{ fontSize: '0.63rem', fontWeight: 700, color: sel ? '#10b981' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{pt.level_name}</div>
+                                                                                    <div style={{ fontSize: '0.75rem', color: sel ? 'var(--text-main)' : 'var(--text-muted)', fontWeight: sel ? 700 : 500, marginTop: 1 }}>Rp {Number(pt.price).toLocaleString('id-ID')}</div>
+                                                                                </div>
+                                                                            );
+                                                                        }) : <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Belum ada tier harga</span>}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         );

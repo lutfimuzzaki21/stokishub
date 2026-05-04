@@ -24,7 +24,7 @@ export default function SalesHomeScreen({ onNavigate = () => {} }) {
                 const [commRes, visitRes, conRes] = await Promise.all([
                     axios.get(`${BASE_URL}/api/commissions?salesId=${user.id}`).catch(() => null),
                     axios.get(`${BASE_URL}/api/visits?salesId=${user.id}`).catch(() => null),
-                    axios.get(`${BASE_URL}/api/consumers?parentId=${user.id}`).catch(() => null),
+                    axios.get(`${BASE_URL}/api/consumers?salesId=${user.id}`).catch(() => null),
                 ]);
                 if (commRes) {
                     const now = new Date();

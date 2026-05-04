@@ -8,7 +8,7 @@ import { theme } from '../theme';
 import { useAuth, BASE_URL } from '../context/AuthContext';
 import {
     User, Mail, Phone, MapPin, Building2,
-    Star, LogOut, Pencil, X, Check, Navigation,
+    Star, LogOut, Pencil, X, Check, Navigation, Lock, Eye, EyeOff,
 } from 'lucide-react-native';
 import axios from 'axios';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -18,6 +18,7 @@ import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 export default function ConsumerProfileScreen() {
     const { user, logout, updateUser } = useAuth();
     const [parentInfo, setParentInfo] = useState(null);
+    const [registeredByInfo, setRegisteredByInfo] = useState(null);
     const [editModal, setEditModal] = useState(false);
     const [saving, setSaving] = useState(false);
     const [gettingLocation, setGettingLocation] = useState(false);
@@ -34,10 +35,15 @@ export default function ConsumerProfileScreen() {
         address: user?.address || '',
         latitude: user?.latitude != null ? String(user.latitude) : '',
         longitude: user?.longitude != null ? String(user.longitude) : '',
+        newPassword: '',
+        confirmPassword: '',
     });
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     useEffect(() => {
         if (user?.parent_id) fetchParentInfo();
+        if (user?.sales_id) fetchRegisteredByInfo();
     }, []);
 
     if (!user) return null;
@@ -46,6 +52,13 @@ export default function ConsumerProfileScreen() {
         try {
             const res = await axios.get(`${BASE_URL}/api/user/${user.parent_id}`, { timeout: 8000 });
             setParentInfo(res.data);
+        } catch (_) {}
+    };
+
+    const fetchRegisteredByInfo = async () => {
+        try {
+            const res = await axios.get(`${BASE_URL}/api/user/${user.sales_id}`, { timeout: 8000 });
+            setRegisteredByInfo(res.data);
         } catch (_) {}
     };
 
@@ -64,6 +77,8 @@ export default function ConsumerProfileScreen() {
             address: fresh.address || '',
             latitude: fresh.latitude != null ? String(fresh.latitude) : '',
             longitude: fresh.longitude != null ? String(fresh.longitude) : '',
+            newPassword: '',
+            confirmPassword: '',
         });
         setEditModal(true);
     };
@@ -78,19 +93,33 @@ export default function ConsumerProfileScreen() {
             return;
         }
         setSaving(true);
+        if (editForm.newPassword || editForm.confirmPassword) {
+            if (editForm.newPassword.length < 6) {
+                Alert.alert('Password terlalu pendek', 'Password baru minimal 6 karakter.');
+                setSaving(false);
+                return;
+            }
+            if (editForm.newPassword !== editForm.confirmPassword) {
+                Alert.alert('Password tidak cocok', 'New password dan Confirm password harus sama.');
+                setSaving(false);
+                return;
+            }
+        }
         try {
             const lat = editForm.latitude.trim();
             const lng = editForm.longitude.trim();
             if (lat && isNaN(parseFloat(lat))) { Alert.alert('Latitude tidak valid'); setSaving(false); return; }
             if (lng && isNaN(parseFloat(lng))) { Alert.alert('Longitude tidak valid'); setSaving(false); return; }
-            const res = await axios.put(`${BASE_URL}/api/user/${user.id}`, {
+            const payload = {
                 name: editForm.name.trim(),
                 email: editForm.email.trim().toLowerCase(),
                 contact: editForm.contact.trim() || null,
                 address: editForm.address.trim() || null,
                 latitude: lat ? parseFloat(lat) : null,
                 longitude: lng ? parseFloat(lng) : null,
-            }, { timeout: 10000 });
+            };
+            if (editForm.newPassword) payload.password = editForm.newPassword;
+            const res = await axios.put(`${BASE_URL}/api/user/${user.id}`, payload, { timeout: 10000 });
             await updateUser(res.data);
             setEditModal(false);
             Alert.alert('Tersimpan âœ“', 'Profil berhasil diperbarui.');
@@ -266,6 +295,24 @@ export default function ConsumerProfileScreen() {
                             )}
                         </View>
                     </View>
+
+                    {/* Didaftarkan oleh */}
+                    <View style={[styles.stokisCard, { marginTop: 10 }]}>
+                        <View style={[styles.stokisIcon, { backgroundColor: user.sales_id ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)' }]}>
+                            <User size={20} color={user.sales_id ? '#10b981' : theme.colors.primaryLight} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.stokisLabel}>Didaftarkan oleh</Text>
+                            <Text numberOfLines={1} style={styles.stokisName}>
+                                {user.sales_id
+                                    ? (registeredByInfo?.name || `Sales #${user.sales_id}`)
+                                    : (parentInfo?.store_name || parentInfo?.name || 'Stokis')}
+                            </Text>
+                            <Text numberOfLines={1} style={[styles.stokisContact, { color: user.sales_id ? '#10b981' : theme.colors.primaryLight }]}>
+                                {user.sales_id ? 'Sales' : (parentInfo?.role === 'SUBSTOKIS' ? 'Sub Stokis' : 'Stokis')}
+                            </Text>
+                        </View>
+                    </View>
                 </View>
 
                 {/* Logout */}
@@ -409,7 +456,53 @@ export default function ConsumerProfileScreen() {
                             {(editForm.latitude && editForm.longitude) ? (
                                 <Text style={styles.coordConfirm}>📍 {parseFloat(editForm.latitude).toFixed(5)}, {parseFloat(editForm.longitude).toFixed(5)}</Text>
                             ) : (
-                                <Text style={styles.coordHint}>Opsional — digunakan untuk titik pengiriman di peta</Text>
+                <Text style={styles.coordHint}>Opsional — digunakan untuk titik pengiriman di peta</Text>
+                            )}
+
+                            {/* Password Section */}
+                            <View style={styles.pwDivider} />
+                            <Text style={[styles.fieldLabel, { marginTop: 4 }]}>Ganti Password</Text>
+                            <Text style={styles.pwHint}>Kosongkan jika tidak ingin mengganti password</Text>
+
+                            <Text style={styles.fieldLabel}>New Password</Text>
+                            <View style={styles.fieldWrap}>
+                                <Lock size={15} color={theme.colors.muted} />
+                                <TextInput
+                                    style={styles.fieldInput}
+                                    value={editForm.newPassword}
+                                    onChangeText={v => setEditForm(f => ({ ...f, newPassword: v }))}
+                                    placeholder="Min. 6 karakter"
+                                    placeholderTextColor={theme.colors.muted}
+                                    secureTextEntry={!showNewPassword}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity onPress={() => setShowNewPassword(v => !v)}>
+                                    {showNewPassword
+                                        ? <EyeOff size={15} color={theme.colors.muted} />
+                                        : <Eye size={15} color={theme.colors.muted} />}
+                                </TouchableOpacity>
+                            </View>
+
+                            <Text style={styles.fieldLabel}>Confirm Password</Text>
+                            <View style={[styles.fieldWrap, editForm.confirmPassword && editForm.newPassword !== editForm.confirmPassword ? { borderColor: '#ef4444' } : {}]}>
+                                <Lock size={15} color={theme.colors.muted} />
+                                <TextInput
+                                    style={styles.fieldInput}
+                                    value={editForm.confirmPassword}
+                                    onChangeText={v => setEditForm(f => ({ ...f, confirmPassword: v }))}
+                                    placeholder="Ulangi password baru"
+                                    placeholderTextColor={theme.colors.muted}
+                                    secureTextEntry={!showConfirmPassword}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity onPress={() => setShowConfirmPassword(v => !v)}>
+                                    {showConfirmPassword
+                                        ? <EyeOff size={15} color={theme.colors.muted} />
+                                        : <Eye size={15} color={theme.colors.muted} />}
+                                </TouchableOpacity>
+                            </View>
+                            {editForm.confirmPassword && editForm.newPassword !== editForm.confirmPassword && (
+                                <Text style={styles.pwMismatch}>Password tidak cocok</Text>
                             )}
                         </ScrollView>
 
@@ -627,6 +720,9 @@ const styles = StyleSheet.create({
     coordLabel: { fontSize: 10, fontWeight: '800', color: theme.colors.muted, letterSpacing: 0.5, marginRight: 4 },
     coordConfirm: { fontSize: 12, color: '#10b981', fontWeight: '700', marginBottom: 4 },
     coordHint: { fontSize: 11, color: theme.colors.muted, marginBottom: 4, fontStyle: 'italic' },
+    pwDivider: { height: 1, backgroundColor: theme.colors.border, marginVertical: 20 },
+    pwHint: { fontSize: 11, color: theme.colors.muted, marginBottom: 12, marginTop: -8 },
+    pwMismatch: { fontSize: 11, color: '#ef4444', marginTop: -8, marginBottom: 8, marginLeft: 4 },
     mapPickerHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: theme.colors.card, paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 8 : 54, paddingBottom: 14, borderBottomWidth: 1, borderColor: theme.colors.border },
     mapPickerClose: { width: 36, height: 36, borderRadius: 10, backgroundColor: theme.colors.glass, justifyContent: 'center', alignItems: 'center' },
     mapPickerTitle: { fontSize: 15, fontWeight: '900', color: theme.colors.text },

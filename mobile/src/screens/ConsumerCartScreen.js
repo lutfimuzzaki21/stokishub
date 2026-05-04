@@ -13,11 +13,11 @@ import {
 import axios from 'axios';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const formatRp = (v) => `Rp ${v.toLocaleString('id-ID')}`;
+const formatRp = (v) => `Rp ${(v ?? 0).toLocaleString('id-ID')}`;
 
 export default function ConsumerCartScreen({ onNavigate }) {
     const { user } = useAuth();
-    const { items, updateQty, removeItem, clearCart, totalItems, totalPrice } = useCart();
+    const { items, updateQty, removeItem, clearCart, totalItems, totalUnits, totalPrice } = useCart();
     const [submitting, setSubmitting] = useState(false);
 
     const handleCheckout = async () => {
@@ -39,6 +39,9 @@ export default function ConsumerCartScreen({ onNavigate }) {
                                     productId: i.productId,
                                     quantity: i.quantity,
                                     price: i.price,
+                                    packagingId: i.packagingId || null,
+                                    packagingName: i.packagingName || null,
+                                    unitQty: i.unitQty || 1,
                                 })),
                             }, { timeout: 15000 });
                             clearCart();
@@ -97,7 +100,7 @@ export default function ConsumerCartScreen({ onNavigate }) {
 
             <FlatList
                 data={items}
-                keyExtractor={i => i.productId.toString()}
+                keyExtractor={i => `${i.productId}-${i.packagingId || 'unit'}`}
                 contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
                 showsVerticalScrollIndicator={false}
                 renderItem={({ item }) => (
@@ -108,23 +111,24 @@ export default function ConsumerCartScreen({ onNavigate }) {
                         <View style={styles.cartItemMid}>
                             {item.brand ? <Text numberOfLines={1} style={styles.cartItemBrand}>{item.brand}</Text> : null}
                             <Text numberOfLines={2} style={styles.cartItemName}>{item.name}</Text>
-                            <Text style={styles.cartItemPrice}>{formatRp(item.price)}/pcs</Text>
+                            {item.packagingName && <Text style={styles.cartItemPkg}>📦 {item.packagingName} ({item.unitQty} unit)</Text>}
+                            <Text style={styles.cartItemPrice}>{formatRp(item.price)}/{item.packagingName || 'pcs'}</Text>
                         </View>
                         <View style={styles.cartItemRight}>
-                            <TouchableOpacity onPress={() => removeItem(item.productId)} style={styles.deleteBtn}>
+                            <TouchableOpacity onPress={() => removeItem(item.productId, item.packagingId)} style={styles.deleteBtn}>
                                 <Trash2 size={14} color={theme.colors.danger} />
                             </TouchableOpacity>
                             <View style={styles.qtyControl}>
                                 <TouchableOpacity
                                     style={styles.qtyBtn}
-                                    onPress={() => updateQty(item.productId, item.quantity - 1)}
+                                    onPress={() => updateQty(item.productId, item.quantity - 1, item.packagingId)}
                                 >
                                     <Minus size={14} color={theme.colors.text} />
                                 </TouchableOpacity>
                                 <Text style={styles.qtyVal}>{item.quantity}</Text>
                                 <TouchableOpacity
                                     style={[styles.qtyBtn, item.quantity >= item.maxStock && styles.qtyBtnDisabled]}
-                                    onPress={() => updateQty(item.productId, item.quantity + 1)}
+                                    onPress={() => updateQty(item.productId, item.quantity + 1, item.packagingId)}
                                     disabled={item.quantity >= item.maxStock}
                                 >
                                     <Plus size={14} color={item.quantity >= item.maxStock ? theme.colors.muted : theme.colors.text} />
@@ -138,8 +142,8 @@ export default function ConsumerCartScreen({ onNavigate }) {
                     <View style={styles.summaryBox}>
                         <Text style={styles.summaryTitle}>Ringkasan</Text>
                         <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLbl}>Total Item</Text>
-                            <Text style={styles.summaryVal}>{totalItems} pcs</Text>
+                            <Text style={styles.summaryLbl}>Total Unit</Text>
+                            <Text style={styles.summaryVal}>{totalUnits} unit</Text>
                         </View>
                         <View style={[styles.summaryRow, { marginTop: 4 }]}>
                             <Text style={styles.summaryLbl}>Jenis Produk</Text>
@@ -157,7 +161,7 @@ export default function ConsumerCartScreen({ onNavigate }) {
             <View style={styles.footer}>
                 <View style={styles.footerInfo}>
                     <Text style={styles.footerTotal}>{formatRp(totalPrice)}</Text>
-                    <Text style={styles.footerCount}>{totalItems} item</Text>
+                    <Text style={styles.footerCount}>{totalItems} item · {totalUnits} unit</Text>
                 </View>
                 <TouchableOpacity
                     style={[styles.checkoutBtn, submitting && styles.checkoutBtnLoading]}
@@ -216,6 +220,7 @@ const styles = StyleSheet.create({
     cartItemBrand: { fontSize: 10, color: theme.colors.muted, fontWeight: '600', marginBottom: 2 },
     cartItemName: { fontSize: 13, fontWeight: '800', color: theme.colors.text },
     cartItemPrice: { fontSize: 11, color: theme.colors.muted, marginTop: 4 },
+    cartItemPkg: { fontSize: 10, color: theme.colors.primaryLight, fontWeight: '700', marginTop: 2 },
     cartItemRight: { alignItems: 'flex-end', gap: 6 },
     deleteBtn: {
         width: 28, height: 28, borderRadius: 8,

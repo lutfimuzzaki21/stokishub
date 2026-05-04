@@ -53,6 +53,50 @@ const noLocationIcon = new L.divIcon({
     iconAnchor: [14, 14]
 });
 
+// Sub-component: product card with per-row qty state
+const SPOCard = ({ p, rows, handleAddToCart }) => {
+    const [qtys, setQtys] = React.useState(() => {
+        const init = {};
+        rows.forEach(r => { init[r.key] = 1; });
+        return init;
+    });
+    return (
+        <div className="spo-card">
+            <div className="spo-card-head">
+                <span className="spo-sku">{p.code}</span>
+                <div>
+                    <div className="spo-name">{p.name}</div>
+                    <div className="spo-avail">Stok tersedia: <strong style={{ color: 'var(--text-primary)' }}>{p.stock}</strong> unit</div>
+                </div>
+            </div>
+            {rows.map(row => (
+                <div className="spo-row" key={row.key}>
+                    <div>
+                        <div className="spo-row-label">
+                            {row.packagingId ? <span className="spo-pkg-badge"><Package size={11} /> {row.label}</span> : <span style={{ fontSize: '.83rem', color: 'var(--text-muted)' }}>📦 {row.label}</span>}
+                        </div>
+                        <div className="spo-row-sub">{row.sub}</div>
+                    </div>
+                    <div>
+                        <div className="spo-price">Rp {Number(row.price).toLocaleString('id-ID')}</div>
+                        <div className="spo-price-sub">{row.priceLabel}</div>
+                    </div>
+                    <div className="spo-row-action">
+                        <input
+                            type="number" min="1" className="spo-qty-input"
+                            value={qtys[row.key]}
+                            onChange={e => setQtys(q => ({ ...q, [row.key]: e.target.value }))}
+                        />
+                        <button className="spo-add-btn" onClick={() => handleAddToCart(p, qtys[row.key], row.packagingId)}>
+                            <ShoppingCart size={13} /> Tambah
+                        </button>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
 const DashboardSubstokis = () => {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('Overview');
@@ -214,21 +258,26 @@ const DashboardSubstokis = () => {
     const fetchCommissionData = async (salesIdParam) => {
         setCommLoading(true);
         const sid = salesIdParam !== undefined ? salesIdParam : selectedSalesId;
+        // Use parent stokis ID so substokis always sees stokis's configs (read-only)
+        const stokisIdForQuery = parentId || userId;
         try {
             const salesIdQuery = sid ? `&salesId=${sid}` : '';
-            const [prodRes, campRes, teamRes] = await Promise.all([
-                axios.get(`http://localhost:5000/api/commission-configs?stokisId=${userId}${salesIdQuery}`),
-                axios.get(`http://localhost:5000/api/commission-campaigns?stokisId=${userId}`),
+            const [prodRes, teamRes] = await Promise.all([
+                axios.get(`http://localhost:5000/api/commission-configs?stokisId=${stokisIdForQuery}${salesIdQuery}`),
                 axios.get(`http://localhost:5000/api/team?parentId=${userId}`),
             ]);
             setCommProducts(prodRes.data);
             const pc = {};
             prodRes.data.forEach(p => {
                 const cfg = p.commissionConfigs && p.commissionConfigs[0];
-                pc[p.id] = { isActive: cfg ? cfg.isActive : false, commissionType: cfg ? cfg.commissionType : 'CUMULATIVE' };
+                const pkgConfigs = {};
+                (p.packagings || []).forEach(pkg => {
+                    const pkgCfg = pkg.commissionConfigs && pkg.commissionConfigs[0];
+                    pkgConfigs[pkg.id] = { isActive: pkgCfg ? pkgCfg.isActive : false, commissionType: pkgCfg ? pkgCfg.commissionType : 'CUMULATIVE' };
+                });
+                pc[p.id] = { isActive: cfg ? cfg.isActive : false, commissionType: cfg ? cfg.commissionType : 'CUMULATIVE', packagings: pkgConfigs };
             });
             setPendingConfigs(pc);
-            setCommCampaigns(campRes.data);
             setCommSalesTeam((teamRes.data || []).filter(m => m.role === 'SALES'));
         } catch (err) {
             console.error('Gagal memuat data komisi', err);
@@ -354,10 +403,6 @@ const DashboardSubstokis = () => {
         } else if (activeTab === 'Distribusi') {
             fetchOrders();
             fetchTeam();
-        } else if (activeTab === 'Kunjungan Sales') {
-            fetchVisitMarkers();
-        } else if (activeTab === 'Komisi Sales') {
-            fetchCommissionData();
         }
     }, [activeTab]);
 
@@ -394,8 +439,6 @@ const DashboardSubstokis = () => {
             items: [
                 { name: 'Manajemen Tim', icon: <Users size={18} /> },
                 { name: 'Manajemen Tier & Pelanggan', icon: <Layers size={18} /> },
-                { name: 'Kunjungan Sales', icon: <MapPin size={18} /> },
-                { name: 'Komisi Sales', icon: <Gift size={18} /> },
             ]
         },
         {
@@ -458,42 +501,51 @@ const DashboardSubstokis = () => {
     };
 
     // --- PURCHASE STOKIS HANDLERS ---
-    const handleAddToCart = (product, qtyStr) => {
-        const qty = parseInt(qtyStr);
-        if (isNaN(qty) || qty <= 0) return;
+    const handleAddToCart = (product, qty, packagingId = null) => {
+        const q = parseInt(qty);
+        if (isNaN(q) || q <= 0) return;
 
-        // Cari Harga sesuai tier yang ditentukan oleh Stokis Utama
         const override = product.userPriceTiers?.[0];
         const targetLevel = override ? override.level_name : myPriceLevel;
-        let targetTier = product.priceTiers?.find(t => t.level_name.toLowerCase() === targetLevel.toLowerCase());
-        if (!targetTier) targetTier = product.priceTiers && product.priceTiers[0];
 
-        const price = targetTier ? targetTier.price : 50000; // default 50rb jika belum ada
+        let price, label, unitQty = 1, packagingName = null;
+        if (packagingId) {
+            const pkg = product.packagings?.find(pk => pk.id === packagingId);
+            const pkgOverride = pkg?.userPackagingTiers?.[0];
+            const pkgTargetLevel = pkgOverride ? pkgOverride.level_name : targetLevel;
+            let pkgTier = pkg?.priceTiers?.find(t => t.level_name.toLowerCase() === pkgTargetLevel.toLowerCase());
+            if (!pkgTier) pkgTier = pkg?.priceTiers?.[0];
+            price = pkgTier ? pkgTier.price : 0;
+            packagingName = pkg?.name || null;
+            unitQty = pkg?.unitQty || 1;
+            label = `${product.code} (${pkg?.name})`;
+        } else {
+            let targetTier = product.priceTiers?.find(t => t.level_name.toLowerCase() === targetLevel.toLowerCase());
+            if (!targetTier) targetTier = product.priceTiers?.[0];
+            price = targetTier ? targetTier.price : 50000;
+            label = `${product.code} (Unit)`;
+        }
 
-        const existingItem = purchaseCart.find(i => i.productId === product.id);
-
+        const cartKey = `${product.id}-${packagingId || 'unit'}`;
+        const existingItem = purchaseCart.find(i => i.cartKey === cartKey);
         if (existingItem) {
-            setPurchaseCart(purchaseCart.map(i =>
-                i.productId === product.id ? { ...i, quantity: i.quantity + qty } : i
-            ));
+            setPurchaseCart(purchaseCart.map(i => i.cartKey === cartKey ? { ...i, quantity: i.quantity + q } : i));
         } else {
             setPurchaseCart([...purchaseCart, {
-                productId: product.id,
-                code: product.code,
-                name: product.name,
-                quantity: qty,
-                price: price
+                cartKey, productId: product.id, packagingId: packagingId || null,
+                packagingName, unitQty, code: product.code, name: product.name,
+                quantity: q, price
             }]);
         }
 
         MySwal.fire({
-            toast: true, position: 'top-end', icon: 'success', title: `+${qty} ${product.code} di Keranjang!`,
+            toast: true, position: 'top-end', icon: 'success', title: `+${q} ${label} di Keranjang!`,
             showConfirmButton: false, timer: 1500, background: 'var(--bg-card)', color: 'var(--text-main)'
         });
     };
 
-    const removeFromCart = (productId) => {
-        setPurchaseCart(purchaseCart.filter(i => i.productId !== productId));
+    const removeFromCart = (cartKey) => {
+        setPurchaseCart(purchaseCart.filter(i => i.cartKey !== cartKey));
     };
 
     const submitPurchaseOrder = async () => {
@@ -520,6 +572,9 @@ const DashboardSubstokis = () => {
                     stokisId: parentId,
                     items: purchaseCart.map(c => ({
                         productId: c.productId,
+                        packagingId: c.packagingId || null,
+                        packagingName: c.packagingName || null,
+                        unitQty: c.unitQty || 1,
                         quantity: c.quantity,
                         price: c.price
                     }))
@@ -543,11 +598,11 @@ const DashboardSubstokis = () => {
     // States for Team Management
     const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
     const [editingTeamId, setEditingTeamId] = useState(null);
-    const [formTeam, setFormTeam] = useState({ name: '', email: '', password: '', role: 'SALES', contact: '', address: '' });
+    const [formTeam, setFormTeam] = useState({ name: '', email: '', password: '', role: 'DRIVER', contact: '', address: '' });
 
     const openAddTeamModal = () => {
         setEditingTeamId(null);
-        setFormTeam({ name: '', email: '', password: '', role: 'SALES', contact: '', address: '' });
+        setFormTeam({ name: '', email: '', password: '', role: 'DRIVER', contact: '', address: '' });
         setIsAddTeamModalOpen(true);
     };
 
@@ -729,7 +784,6 @@ const DashboardSubstokis = () => {
             const mySales = orders.filter(o => o.stokisId === userId);
             const totalRevenue = mySales.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
             const totalStock = products.reduce((acc, curr) => acc + (curr.stock || 0), 0);
-            const salesCount = team.filter(t => t.role === 'SALES').length;
             const driverCount = team.filter(t => t.role === 'DRIVER').length;
             const pendingOrders = orders.filter(o => o.stokisId === userId && o.status === 'PENDING').length;
 
@@ -799,9 +853,9 @@ const DashboardSubstokis = () => {
                         <div className="sub-ov-stat">
                             <div className="sub-ov-stat-icon amber"><Users size={20} /></div>
                             <div>
-                                <div className="sub-ov-stat-label">Tim Lapangan</div>
-                                <div className="sub-ov-stat-value">{salesCount + driverCount}</div>
-                                <div className="sub-ov-stat-sub">{salesCount} Sales Â· {driverCount} Driver</div>
+                                <div className="sub-ov-stat-label">Driver Lapangan</div>
+                                <div className="sub-ov-stat-value">{driverCount}</div>
+                                <div className="sub-ov-stat-sub">{driverCount} Driver aktif</div>
                             </div>
                         </div>
                         <div className="sub-ov-stat">
@@ -850,7 +904,7 @@ const DashboardSubstokis = () => {
                                 {[
                                     { tab: 'Produk & Harga', icon: <Diamond size={20} color="#818cf8" />, label: 'Atur Harga Jual' },
                                     { tab: 'Purchasing Stokis', icon: <ShoppingCart size={20} color="#22c55e" />, label: 'Beli Stok ke Pusat' },
-                                    { tab: 'Manajemen Tim', icon: <Users size={20} color="#3b82f6" />, label: 'Kelola Driver/Sales' },
+                                    { tab: 'Manajemen Tim', icon: <Users size={20} color="#3b82f6" />, label: 'Kelola Driver' },
                                     { tab: 'Distribusi', icon: <Truck size={20} color="#f59e0b" />, label: 'Monitor Pengiriman' },
                                 ].map(qa => (
                                     <button key={qa.tab} className="sub-ov-qa-btn" onClick={() => setActiveTab(qa.tab)}>
@@ -946,21 +1000,25 @@ const DashboardSubstokis = () => {
                         .spo-cart-btn { display:inline-flex; align-items:center; gap:.5rem; padding:.6rem 1.2rem; border-radius:10px; background:linear-gradient(135deg,#059669,#10b981); color:#fff; border:none; font-size:.83rem; font-weight:700; cursor:pointer; transition:opacity .18s; }
                         .spo-cart-btn:hover { opacity:.88; }
                         .spo-cart-btn:disabled { opacity:.4; cursor:not-allowed; }
-                        .spo-list-header { display:grid; grid-template-columns:100px 1fr 130px 160px; gap:.75rem; padding:.4rem .75rem; margin-bottom:.5rem; }
-                        .spo-list-header span { font-size:.67rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); }
-                        .spo-item { display:grid; grid-template-columns:100px 1fr 130px 160px; gap:.75rem; align-items:center; padding:.9rem .75rem; border-radius:12px; border:1.5px solid var(--border-color); margin-bottom:.65rem; background:var(--bg-card); transition:border-color .18s; }
-                        .spo-item:last-child { margin-bottom:0; }
-                        .spo-item:hover { border-color:#10b981; }
-                        .spo-sku { display:inline-block; font-size:.68rem; font-family:'Courier New',monospace; background:rgba(59,130,246,.1); color:#3b82f6; border:1px solid rgba(59,130,246,.22); border-radius:6px; padding:.2rem .5rem; }
-                        .spo-name { font-weight:700; font-size:.88rem; margin-bottom:.3rem; }
-                        .spo-avail { font-size:.72rem; color:var(--text-muted); }
-                        .spo-price { font-size:.95rem; font-weight:800; font-family:'Courier New',monospace; color:#10b981; }
-                        .spo-price-sub { font-size:.7rem; color:var(--text-muted); margin-top:.15rem; }
-                        .spo-order-wrap { display:flex; flex-direction:column; gap:.5rem; align-items:flex-start; }
-                        .spo-qty-sel { padding:.4rem .6rem; border-radius:8px; border:1.5px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:.82rem; font-family:'Courier New',monospace; cursor:pointer; }
-                        .spo-add-btn { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .85rem; border-radius:8px; background:rgba(16,185,129,.12); color:#10b981; border:1.5px solid rgba(16,185,129,.25); font-size:.78rem; font-weight:700; cursor:pointer; transition:all .18s; white-space:nowrap; }
-                        .spo-add-btn:hover { background:rgba(16,185,129,.22); }
+                        .spo-card { border:1.5px solid var(--border-color); border-radius:14px; background:var(--bg-card); margin-bottom:1rem; transition:border-color .18s; overflow:hidden; }
+                        .spo-card:hover { border-color:#10b981; }
+                        .spo-card-head { display:flex; align-items:center; gap:.9rem; padding:.9rem 1.1rem; border-bottom:1px solid var(--border-color); }
+                        .spo-sku { display:inline-block; font-size:.68rem; font-family:'Courier New',monospace; background:rgba(59,130,246,.1); color:#3b82f6; border:1px solid rgba(59,130,246,.22); border-radius:6px; padding:.2rem .5rem; flex-shrink:0; }
+                        .spo-name { font-weight:800; font-size:.95rem; }
+                        .spo-avail { font-size:.72rem; color:var(--text-muted); margin-top:.15rem; }
+                        .spo-row { display:grid; grid-template-columns:1fr 160px 130px; gap:.75rem; align-items:center; padding:.75rem 1.1rem; border-bottom:1px solid rgba(255,255,255,.04); }
+                        .spo-row:last-child { border-bottom:none; }
+                        .spo-row-label { font-size:.83rem; font-weight:700; }
+                        .spo-row-sub { font-size:.7rem; color:var(--text-muted); margin-top:.1rem; }
+                        .spo-price { font-size:.9rem; font-weight:800; font-family:'Courier New',monospace; color:#10b981; }
+                        .spo-price-sub { font-size:.68rem; color:var(--text-muted); margin-top:.1rem; }
+                        .spo-row-action { display:flex; align-items:center; gap:.5rem; }
+                        .spo-qty-input { width:62px; padding:.38rem .5rem; border-radius:8px; border:1.5px solid var(--border-color); background:var(--bg-main); color:var(--text-primary); font-size:.85rem; font-family:'Courier New',monospace; text-align:center; outline:none; }
+                        .spo-qty-input:focus { border-color:#10b981; }
+                        .spo-add-btn { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .8rem; border-radius:8px; background:rgba(16,185,129,.12); color:#10b981; border:1.5px solid rgba(16,185,129,.25); font-size:.78rem; font-weight:700; cursor:pointer; transition:all .18s; white-space:nowrap; }
+                        .spo-add-btn:hover { background:rgba(16,185,129,.22); border-color:#10b981; }
                         .spo-empty { text-align:center; padding:3rem 1rem; color:var(--text-muted); font-size:.85rem; border:1.5px dashed var(--border-color); border-radius:14px; }
+                        .spo-pkg-badge { display:inline-flex; align-items:center; gap:.3rem; font-size:.68rem; background:rgba(16,185,129,.08); color:#10b981; border:1px solid rgba(16,185,129,.2); border-radius:6px; padding:.15rem .5rem; margin-right:.35rem; }
                     `}</style>
 
                     <div className="spo-header">
@@ -969,15 +1027,8 @@ const DashboardSubstokis = () => {
                             <p>Belanja barang dari distributor Anda untuk menambah stok di gudang cabang secara real-time.</p>
                         </div>
                         <button className="spo-cart-btn" onClick={() => setIsCartModalOpen(true)} disabled={purchaseCart.length === 0}>
-                            <ShoppingCart size={15} /> Keranjang PO ({purchaseCart.length})
+                            <ShoppingCart size={15} /> Keranjang PO ({purchaseCart.reduce((s,i)=>s+i.quantity,0)} item)
                         </button>
-                    </div>
-
-                    <div className="spo-list-header">
-                        <span>Kode SKU</span>
-                        <span>Produk</span>
-                        <span>Harga PO</span>
-                        <span>Order Stok</span>
                     </div>
 
                     {loadingStokisProducts ? (
@@ -988,32 +1039,33 @@ const DashboardSubstokis = () => {
                         stokisProducts.map((p) => {
                             const override = p.userPriceTiers?.[0];
                             const targetLevel = override ? override.level_name : myPriceLevel;
-                            let modalHargaSubstokis = p.priceTiers?.find(t => t.level_name.toLowerCase() === targetLevel.toLowerCase());
-                            if (!modalHargaSubstokis) modalHargaSubstokis = p.priceTiers && p.priceTiers[0];
-                            const hargaPO = modalHargaSubstokis ? modalHargaSubstokis.price : 50000;
+                            let unitTier = p.priceTiers?.find(t => t.level_name.toLowerCase() === targetLevel.toLowerCase());
+                            if (!unitTier) unitTier = p.priceTiers?.[0];
+                            const unitPrice = unitTier ? unitTier.price : 0;
+
+                            // Build rows: unit + each packaging
+                            const rows = [
+                                { key: 'unit', label: 'Per Unit (Satuan)', sub: `Stok: ${p.stock} unit`, price: unitPrice, priceLabel: `/ unit · ${targetLevel}`, packagingId: null, packagingName: null }
+                            ];
+                            (p.packagings || []).forEach(pkg => {
+                                const pkgOverride = pkg.userPackagingTiers?.[0];
+                                const pkgLevel = pkgOverride ? pkgOverride.level_name : targetLevel;
+                                let pkgTier = pkg.priceTiers?.find(t => t.level_name.toLowerCase() === pkgLevel.toLowerCase());
+                                if (!pkgTier) pkgTier = pkg.priceTiers?.[0];
+                                if (!pkgTier) return;
+                                rows.push({
+                                    key: `pkg-${pkg.id}`,
+                                    label: pkg.name,
+                                    sub: `Isi ${pkg.unitQty} unit / kemasan`,
+                                    price: pkgTier.price,
+                                    priceLabel: `/ ${pkg.name} · ${pkgLevel}`,
+                                    packagingId: pkg.id,
+                                    packagingName: pkg.name
+                                });
+                            });
+
                             return (
-                                <div className="spo-item" key={p.id}>
-                                    <div><span className="spo-sku">{p.code}</span></div>
-                                    <div>
-                                        <div className="spo-name">{p.name}</div>
-                                        <div className="spo-avail">Tersedia: <strong style={{color:'var(--text-primary)'}}>{p.stock}</strong> Unit</div>
-                                    </div>
-                                    <div>
-                                        <div className="spo-price">Rp {Number(hargaPO).toLocaleString('id-ID')}</div>
-                                        <div className="spo-price-sub">/ Unit ({targetLevel})</div>
-                                    </div>
-                                    <div className="spo-order-wrap">
-                                        <select id={`qty-${p.id}`} className="spo-qty-sel" defaultValue="10">
-                                            <option value="5">5 Unit</option>
-                                            <option value="10">10 Unit</option>
-                                            <option value="50">50 Unit</option>
-                                            <option value="100">100 Unit</option>
-                                        </select>
-                                        <button className="spo-add-btn" onClick={() => handleAddToCart(p, document.getElementById(`qty-${p.id}`).value)}>
-                                            <ShoppingCart size={13} /> Masukkan
-                                        </button>
-                                    </div>
-                                </div>
+                                <SPOCard key={p.id} p={p} rows={rows} handleAddToCart={handleAddToCart} />
                             );
                         })
                     )}
@@ -1123,7 +1175,6 @@ const DashboardSubstokis = () => {
         }
 
         if (activeTab === 'Manajemen Tim') {
-            const salesTeam = team.filter(t => t.role === 'SALES');
             const driverTeam = team.filter(t => t.role === 'DRIVER');
             return (
                 <div className="animate-fade-up delay-100">
@@ -1163,17 +1214,13 @@ const DashboardSubstokis = () => {
                     <div className="stm-header">
                         <div>
                             <h2>Pasukan Lapangan Cabang</h2>
-                            <p>Daftarkan Sales atau Driver agar mereka bisa login aplikasi di smartphone.</p>
+                            <p>Daftarkan Driver agar mereka bisa login aplikasi di smartphone.</p>
                         </div>
                         <button className="stm-add-btn" onClick={openAddTeamModal}><Users size={15} /> Rekrut Personel</button>
                     </div>
 
                     {/* Stats */}
                     <div className="stm-stats">
-                        <div className="stm-stat">
-                            <div className="stm-stat-icon blue"><Users size={18} /></div>
-                            <div><div className="stm-stat-label">Sales</div><div className="stm-stat-value">{salesTeam.length}</div></div>
-                        </div>
                         <div className="stm-stat">
                             <div className="stm-stat-icon amber"><Truck size={18} /></div>
                             <div><div className="stm-stat-label">Driver</div><div className="stm-stat-value">{driverTeam.length}</div></div>
@@ -1195,7 +1242,7 @@ const DashboardSubstokis = () => {
                     {loadingTeam ? (
                         <div className="stm-empty">Mencari data personel...</div>
                     ) : team.length === 0 ? (
-                        <div className="stm-empty">Belum ada tim. Rekrut Sales atau Driver untuk memulai distribusi!</div>
+                        <div className="stm-empty">Belum ada tim. Rekrut Driver untuk memulai distribusi!</div>
                     ) : (
                         team.map(member => {
                             const isDriver = member.role === 'DRIVER';
@@ -1976,265 +2023,126 @@ const DashboardSubstokis = () => {
 
         if (activeTab === 'Komisi Sales') {
             return (
-                <div className="animate-fade-up delay-100">
-                    <style>{[
-                        '.comm-header{margin-bottom:1.25rem}',
-                        '.comm-header h2{font-size:1.25rem;font-weight:800;margin:0 0 .2rem;display:flex;align-items:center;gap:.5rem}',
-                        '.comm-header p{font-size:.8rem;color:var(--text-muted);margin:0}',
-                        '.comm-tab-bar{display:flex;gap:.5rem;margin-bottom:1.25rem;border-bottom:1px solid var(--border-color);padding-bottom:.75rem}',
-                        '.comm-tab{padding:.4rem 1.1rem;border-radius:8px;border:none;background:none;font-size:.82rem;font-weight:700;color:var(--text-muted);cursor:pointer;transition:all .15s}',
-                        '.comm-tab.active{background:rgba(99,102,241,0.15);color:#818cf8}',
-                        '.comm-tab:hover:not(.active){color:var(--text-main)}',
-                        '.comm-table{width:100%;border-collapse:separate;border-spacing:0 .4rem}',
-                        '.comm-table th{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);padding:.5rem .85rem;text-align:left}',
-                        '.comm-table td{padding:.65rem .85rem;background:var(--bg-card);font-size:.82rem}',
-                        '.comm-table tr td:first-child{border-radius:10px 0 0 10px;border-left:1.5px solid var(--border-color);border-top:1.5px solid var(--border-color);border-bottom:1.5px solid var(--border-color)}',
-                        '.comm-table tr td:last-child{border-radius:0 10px 10px 0;border-right:1.5px solid var(--border-color);border-top:1.5px solid var(--border-color);border-bottom:1.5px solid var(--border-color)}',
-                        '.comm-table tr td:not(:first-child):not(:last-child){border-top:1.5px solid var(--border-color);border-bottom:1.5px solid var(--border-color)}',
-                        '.comm-toggle{display:inline-flex;align-items:center;cursor:pointer}',
-                        '.comm-select{background:var(--bg-main,#0f1117);border:1.5px solid var(--border-color);color:var(--text-main);border-radius:8px;padding:.3rem .6rem;font-size:.8rem}',
-                        '.comm-campaign-card{background:var(--bg-card);border:1.5px solid var(--border-color);border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:.85rem}',
-                        '.comm-campaign-card.inactive{opacity:.55}',
-                        '.comm-campaign-header{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.65rem}',
-                        '.comm-campaign-name{font-size:.95rem;font-weight:800;color:var(--text-main)}',
-                        '.comm-campaign-desc{font-size:.78rem;color:var(--text-muted);margin-bottom:.6rem}',
-                        '.comm-campaign-meta{display:flex;flex-wrap:wrap;gap:.4rem .85rem;font-size:.72rem;color:var(--text-muted);margin-bottom:.65rem}',
-                        '.comm-campaign-items{display:flex;flex-wrap:wrap;gap:.4rem}',
-                        '.comm-campaign-item-chip{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:.3rem .7rem;font-size:.72rem;font-weight:700;color:#818cf8}',
-                        '.comm-actions{display:flex;gap:.5rem}',
-                        '.comm-btn{padding:.35rem .85rem;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;border:1.5px solid var(--border-color);background:none;color:var(--text-muted);transition:all .15s}',
-                        '.comm-btn:hover{border-color:#6366f1;color:#818cf8}',
-                        '.comm-btn.danger:hover{border-color:#ef4444;color:#ef4444}',
-                        '.comm-btn.primary{background:#4f46e5;border-color:#4f46e5;color:#fff}',
-                        '.comm-btn.primary:hover{background:#4338ca}',
-                        '.comm-modal-overlay{display:none}',
-                        '.comm-inline-form{background:var(--bg-card);border:1px solid rgba(99,102,241,0.3);border-radius:16px;padding:1.75rem;margin-bottom:1.5rem;box-shadow:0 8px 32px rgba(0,0,0,.25)}',
-                        '.comm-inline-form-title{font-size:1rem;font-weight:900;color:var(--text-main);margin:0 0 1.25rem;padding-bottom:.85rem;border-bottom:1px solid var(--border-color);display:flex;align-items:center;justify-content:space-between}',
-                        '.comm-inline-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start}',
-                        '@media(max-width:700px){.comm-inline-grid{grid-template-columns:1fr}}',
-                        '.comm-form-group{margin-bottom:1rem}',
-                        '.comm-form-label{font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.45rem;display:block}',
-                        '.comm-input{width:100%;background:var(--bg-main,#0f1117);border:1.5px solid var(--border-color);color:var(--text-main);border-radius:10px;padding:.6rem .9rem;font-size:.85rem;box-sizing:border-box}',
-                        '.comm-input:focus{outline:none;border-color:#6366f1}',
-                        '.comm-row{display:flex;gap:.75rem}',
-                        '.comm-row > *{flex:1}',
-                        '.comm-checkbox-row{display:flex;align-items:center;gap:.65rem;cursor:pointer}',
-                        '.comm-checkbox-row input{width:16px;height:16px;accent-color:#6366f1;cursor:pointer}',
-                        '.comm-product-picker{border:1.5px solid var(--border-color);border-radius:10px;max-height:180px;overflow-y:auto}',
-                        '.comm-product-pick-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem .85rem;border-bottom:1px solid var(--border-color);font-size:.8rem;cursor:pointer;transition:background .1s}',
-                        '.comm-product-pick-row:last-child{border-bottom:none}',
-                        '.comm-product-pick-row:hover{background:rgba(99,102,241,0.06)}',
-                        '.comm-product-pick-row.selected{background:rgba(99,102,241,0.1);color:#818cf8}',
-                        '.comm-item-row{display:flex;align-items:center;gap:.5rem;background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.2);border-radius:9px;padding:.45rem .75rem;margin-bottom:.4rem}',
-                        '.comm-item-row-name{flex:1;font-size:.8rem;font-weight:700;color:var(--text-main)}',
-                        '.comm-item-small-select{background:var(--bg-main,#0f1117);border:1px solid var(--border-color);color:var(--text-main);border-radius:6px;padding:.2rem .4rem;font-size:.75rem}',
-                        '.comm-item-small-input{width:80px;background:var(--bg-main,#0f1117);border:1px solid var(--border-color);color:var(--text-main);border-radius:6px;padding:.2rem .5rem;font-size:.75rem}',
-                    ].join('')}</style>
+                <div className="animate-fade-up">
+                    <style>{`
+                        .sc-ro-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem; }
+                        .sc-ro-header h2 { font-size:1.2rem; font-weight:800; margin:0 0 .25rem; }
+                        .sc-ro-header p { font-size:.8rem; color:var(--text-muted); margin:0; }
+                        .sc-ro-info-banner { display:flex; align-items:flex-start; gap:.75rem; padding:1rem 1.1rem; border-radius:12px; background:rgba(99,102,241,.08); border:1.5px solid rgba(129,140,248,.25); margin-bottom:1.5rem; }
+                        .sc-ro-info-banner svg { flex-shrink:0; color:#818cf8; margin-top:1px; }
+                        .sc-ro-info-text { font-size:.82rem; color:var(--text-muted); line-height:1.55; }
+                        .sc-ro-info-text strong { color:var(--text-primary); }
+                        .sc-ro-table-wrap { background:var(--bg-card); border:1.5px solid var(--border-color); border-radius:14px; overflow:hidden; }
+                        .sc-ro-table { width:100%; border-collapse:collapse; font-size:.82rem; }
+                        .sc-ro-table thead th { padding:.75rem 1rem; text-align:left; font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); border-bottom:1.5px solid var(--border-color); background:rgba(255,255,255,.02); }
+                        .sc-ro-table tbody tr { border-bottom:1px solid var(--border-color); transition:background .13s; }
+                        .sc-ro-table tbody tr:last-child { border-bottom:none; }
+                        .sc-ro-table tbody tr:hover { background:rgba(255,255,255,.015); }
+                        .sc-ro-table tbody tr.pkg-sub-row td { background:rgba(99,102,241,.025); }
+                        .sc-ro-table td { padding:.7rem 1rem; vertical-align:middle; }
+                        .sc-ro-sku { display:inline-block; font-size:.68rem; font-family:'Courier New',monospace; background:rgba(99,102,241,.1); color:#818cf8; border:1px solid rgba(99,102,241,.2); border-radius:6px; padding:.2rem .5rem; }
+                        .sc-ro-badge-active { display:inline-flex; align-items:center; gap:.3rem; padding:.3rem .7rem; border-radius:20px; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.25); color:#22c55e; font-size:.72rem; font-weight:700; }
+                        .sc-ro-badge-inactive { display:inline-flex; align-items:center; gap:.3rem; padding:.3rem .7rem; border-radius:20px; background:rgba(107,114,128,.1); border:1px solid rgba(107,114,128,.25); color:#9ca3af; font-size:.72rem; font-weight:700; }
+                        .sc-ro-badge-type { display:inline-block; padding:.25rem .6rem; border-radius:7px; background:rgba(59,130,246,.1); border:1px solid rgba(59,130,246,.2); color:#60a5fa; font-size:.7rem; font-weight:700; }
+                        .sc-ro-badge-unit { display:inline-flex; align-items:center; gap:.3rem; padding:.2rem .55rem; border-radius:6px; background:rgba(168,85,247,.1); border:1px solid rgba(168,85,247,.25); color:#c084fc; font-size:.68rem; font-weight:700; }
+                        .sc-ro-badge-pkg { display:inline-flex; align-items:center; gap:.3rem; padding:.2rem .55rem; border-radius:6px; background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.2); color:#86efac; font-size:.68rem; font-weight:700; }
+                        .sc-ro-lock { display:inline-flex; align-items:center; gap:.3rem; color:#f59e0b; font-size:.7rem; font-weight:700; }
+                        .sc-ro-empty { text-align:center; padding:3rem; color:var(--text-muted); font-size:.85rem; }
+                        .sc-ro-sales-filter { display:flex; align-items:center; gap:.6rem; margin-bottom:1.25rem; flex-wrap:wrap; }
+                        .sc-ro-sales-filter label { font-size:.78rem; font-weight:700; color:var(--text-muted); }
+                        .sc-ro-sales-filter select { padding:.4rem .75rem; border-radius:8px; border:1.5px solid var(--border-color); background:var(--bg-card); color:var(--text-primary); font-size:.8rem; cursor:pointer; }
+                        .sc-ro-sales-filter select:focus { outline:none; border-color:#818cf8; }
+                    `}</style>
 
-                    <div className="comm-header">
-                        <h2><Gift size={18} />Manajemen Komisi Sales</h2>
-                        <p>Atur komisi default per produk dan buat kampanye komisi tambahan untuk tim sales Anda</p>
+                    <div className="sc-ro-header">
+                        <div>
+                            <h2>Komisi Sales — Dari Stokis Pusat</h2>
+                            <p>Konfigurasi komisi di bawah ini diatur oleh Stokis Pusat dan berlaku untuk semua Sales di bawah cabang Anda.</p>
+                        </div>
                     </div>
 
-                    <div className="comm-tab-bar">
-                        <button className={'comm-tab ' + (commTab === 'default' ? 'active' : '')} onClick={() => setCommTab('default')}>Komisi Default (Katalog)</button>
-                        <button className={'comm-tab ' + (commTab === 'campaigns' ? 'active' : '')} onClick={() => setCommTab('campaigns')}>Kampanye Komisi</button>
+                    {/* Info banner */}
+                    <div className="sc-ro-info-banner">
+                        <Gift size={16} />
+                        <div className="sc-ro-info-text">
+                            <strong>Konfigurasi komisi dikelola oleh Stokis Pusat.</strong> Sales Anda akan menerima komisi sesuai setting ini secara otomatis.
+                            Hubungi Stokis Pusat jika ada perubahan yang perlu dilakukan.
+                        </div>
+                    </div>
+
+                    {/* Sales filter */}
+                    <div className="sc-ro-sales-filter">
+                        <label>Filter per Sales:</label>
+                        <select value={selectedSalesId || ''} onChange={e => {
+                            const v = e.target.value ? parseInt(e.target.value) : null;
+                            setSelectedSalesId(v);
+                            fetchCommissionData(v);
+                        }}>
+                            <option value="">— Semua Sales (Default) —</option>
+                            {commSalesTeam.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
                     </div>
 
                     {commLoading ? (
-                        <div style={{textAlign:'center',padding:'3rem',color:'var(--text-muted)'}}>Memuat data...</div>
-                    ) : commTab === 'default' ? (
-                        <>
-                            <div style={{marginBottom:'1rem',display:'flex',alignItems:'center',gap:'.75rem',flexWrap:'wrap'}}>
-                                <label style={{fontSize:'.78rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'.05em',whiteSpace:'nowrap'}}>Tampilkan Untuk:</label>
-                                <select className="comm-input" style={{maxWidth:240,flex:'0 0 auto'}} value={selectedSalesId || ''} onChange={e => {
-                                    const val = e.target.value ? parseInt(e.target.value) : null;
-                                    setSelectedSalesId(val);
-                                    fetchCommissionData(val);
-                                }}>
-                                    <option value="">Default (Semua Sales)</option>
-                                    {commSalesTeam.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                </select>
-                            </div>
-                            <div style={{marginBottom:'1rem',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'.5rem'}}>
-                                <p style={{margin:0,fontSize:'.82rem',color:'var(--text-muted)'}}>Komisi default diambil dari nilai komisi di tabel harga produk. Atur apakah komisi berlaku kumulatif (setiap pembelian) atau hanya pembelian pertama.</p>
-                                <button className="comm-btn primary" onClick={saveCommissionConfigs}>Simpan Perubahan</button>
-                            </div>
-                            {commProducts.length === 0 ? (
-                                <div style={{textAlign:'center',padding:'3rem',color:'var(--text-muted)',background:'var(--bg-card)',borderRadius:14,border:'1.5px solid var(--border-color)'}}>Belum ada produk.</div>
-                            ) : (
-                                <table className="comm-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Produk</th>
-                                            <th>Komisi per Tier</th>
-                                            <th style={{textAlign:'center'}}>Aktifkan</th>
-                                            <th>Jenis Komisi</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {commProducts.map(p => {
-                                            const cfg = pendingConfigs[p.id] || { isActive: false, commissionType: 'CUMULATIVE' };
-                                            const tiers = p.priceTiers || [];
-                                            return (
-                                                <tr key={p.id}>
+                        <div className="sc-ro-empty">Memuat konfigurasi komisi...</div>
+                    ) : commProducts.length === 0 ? (
+                        <div className="sc-ro-empty">Belum ada konfigurasi komisi dari Stokis Pusat.</div>
+                    ) : (
+                        <div className="sc-ro-table-wrap">
+                            <table className="sc-ro-table">
+                                <thead>
+                                    <tr>
+                                        <th>Produk</th>
+                                        <th>Varian</th>
+                                        <th>Status</th>
+                                        <th>Tipe Komisi</th>
+                                        <th style={{textAlign:'center'}}><span className="sc-ro-lock"><Gift size={12}/> Dari Stokis Pusat</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {commProducts.map(p => {
+                                        const cfg = pendingConfigs[p.id] || { isActive: false, commissionType: 'CUMULATIVE', packagings: {} };
+                                        return (
+                                            <React.Fragment key={p.id}>
+                                                {/* Unit row */}
+                                                <tr>
                                                     <td>
-                                                        <div style={{fontWeight:800,color:'var(--text-main)'}}>{p.name}</div>
-                                                        <div style={{fontSize:'.72rem',color:'var(--text-muted)'}}>{p.code}</div>
+                                                        <div style={{fontWeight:700, fontSize:'.85rem', marginBottom:'.2rem'}}>{p.name}</div>
+                                                        <span className="sc-ro-sku">{p.code}</span>
                                                     </td>
+                                                    <td><span className="sc-ro-badge-unit">Satuan / Unit</span></td>
                                                     <td>
-                                                        {tiers.length === 0
-                                                            ? <span style={{color:'var(--text-muted)',fontSize:'.75rem'}}>Belum ada tier harga</span>
-                                                            : tiers.map(t => (
-                                                                <div key={t.id} style={{fontSize:'.75rem',color:'var(--text-muted)',lineHeight:1.6}}>
-                                                                    {t.level_name}: <strong style={{color:'#10b981'}}>Rp {t.commission.toLocaleString('id-ID')}</strong>
-                                                                </div>
-                                                            ))
+                                                        {cfg.isActive
+                                                            ? <span className="sc-ro-badge-active">✓ Aktif</span>
+                                                            : <span className="sc-ro-badge-inactive">✗ Nonaktif</span>
                                                         }
                                                     </td>
-                                                    <td style={{textAlign:'center'}}>
-                                                        <span className="comm-toggle" onClick={() => setPendingConfigs(pc => ({ ...pc, [p.id]: { ...cfg, isActive: !cfg.isActive } }))} title={cfg.isActive ? 'Klik untuk nonaktifkan' : 'Klik untuk aktifkan'}>
-                                                            {cfg.isActive ? <ToggleRight size={28} color="#10b981" /> : <ToggleLeft size={28} color="var(--text-muted)" />}
-                                                        </span>
-                                                    </td>
-                                                    <td>
-                                                        <select className="comm-select" value={cfg.commissionType} disabled={!cfg.isActive} onChange={e => setPendingConfigs(pc => ({ ...pc, [p.id]: { ...cfg, commissionType: e.target.value } }))}>
-                                                            <option value="CUMULATIVE">Kumulatif (setiap pembelian)</option>
-                                                            <option value="FIRST_PURCHASE">Hanya pembelian pertama</option>
-                                                        </select>
-                                                    </td>
+                                                    <td><span className="sc-ro-badge-type">{cfg.commissionType === 'CUMULATIVE' ? 'Kumulatif' : cfg.commissionType === 'TIERED' ? 'Bertingkat' : cfg.commissionType}</span></td>
+                                                    <td style={{textAlign:'center', color:'#6b7280', fontSize:'.75rem'}}>🔒 Read-only</td>
                                                 </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            )}
-                        </>
-                    ) : (
-                        <>
-                            <div style={{marginBottom:'1rem',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'.5rem'}}>
-                                <p style={{margin:0,fontSize:'.82rem',color:'var(--text-muted)'}}>Buat kampanye komisi tambahan di luar komisi default. Kampanye bisa digabung dengan komisi default atau berdiri sendiri.</p>
-                                <button className="comm-btn primary" onClick={openNewCampaign}><Plus size={14} style={{display:'inline',marginRight:4}} />Buat Kampanye Baru</button>
-                            </div>
-                            {commCampaigns.length === 0 ? (
-                                <div style={{textAlign:'center',padding:'3rem',color:'var(--text-muted)',background:'var(--bg-card)',borderRadius:14,border:'1.5px solid var(--border-color)'}}>Belum ada kampanye. Klik "Buat Kampanye Baru" untuk memulai.</div>
-                            ) : (
-                                commCampaigns.map(c => (
-                                    <div key={c.id} className={'comm-campaign-card' + (c.isActive ? '' : ' inactive')}>
-                                        <div className="comm-campaign-header">
-                                            <div>
-                                                <div className="comm-campaign-name">{c.name}</div>
-                                                {c.description && <div className="comm-campaign-desc">{c.description}</div>}
-                                            </div>
-                                            <div className="comm-actions">
-                                                <button className="comm-btn" onClick={() => toggleCampaign(c.id)}>
-                                                    {c.isActive ? <ToggleRight size={16} color="#10b981" /> : <ToggleLeft size={16} />}
-                                                    {' '}{c.isActive ? 'Aktif' : 'Nonaktif'}
-                                                </button>
-                                                <button className="comm-btn" onClick={() => openEditCampaign(c)}>Edit</button>
-                                                <button className="comm-btn danger" onClick={() => deleteCampaign(c.id)}>Hapus</button>
-                                            </div>
-                                        </div>
-                                        <div className="comm-campaign-meta">
-                                            <span>{c.combineWithDefault ? 'Digabung dengan komisi default' : 'Tidak digabung dengan komisi default'}</span>
-                                            {c.salesUser ? <span style={{color:'#818cf8',fontWeight:700}}>Target: {c.salesUser.name}</span> : <span style={{color:'var(--text-muted)'}}>Target: Semua Sales</span>}
-                                            {c.startDate && <span>Mulai: {new Date(c.startDate).toLocaleDateString('id-ID', {day:'2-digit',month:'short',year:'numeric'})}</span>}
-                                            {c.endDate && <span>Berakhir: {new Date(c.endDate).toLocaleDateString('id-ID', {day:'2-digit',month:'short',year:'numeric'})}</span>}
-                                        </div>
-                                        <div className="comm-campaign-items">
-                                            {c.items.map(item => (
-                                                <span key={item.id} className="comm-campaign-item-chip">
-                                                    {item.product ? item.product.name : ''} {item.amountType === 'FLAT' ? ('Rp ' + parseFloat(item.amount).toLocaleString('id-ID')) : (item.amount + '%')}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </>
-                    )}
-
-                    {showCampaignModal && (
-                        <div className="comm-inline-form">
-                            <div className="comm-inline-form-title">
-                                <span>{editingCampaign ? 'Edit Kampanye Komisi' : 'Buat Kampanye Komisi Baru'}</span>
-                                <button style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',padding:'2px 4px',borderRadius:6,fontSize:'1.1rem',lineHeight:1}} onClick={() => setShowCampaignModal(false)}>✕</button>
-                            </div>
-                            <div className="comm-inline-grid">
-                                <div>
-                                    <div className="comm-form-group">
-                                        <label className="comm-form-label">Nama Kampanye *</label>
-                                        <input className="comm-input" value={campaignForm.name} onChange={e => setCampaignForm(f => ({...f, name: e.target.value}))} placeholder="Contoh: Bonus Produk A Oktober 2026" />
-                                    </div>
-                                    <div className="comm-form-group">
-                                        <label className="comm-form-label">Target Sales (Opsional)</label>
-                                        <select className="comm-input" value={campaignForm.salesId || ''} onChange={e => setCampaignForm(f => ({...f, salesId: e.target.value ? parseInt(e.target.value) : null}))}>
-                                            <option value="">Semua Sales (Tidak Spesifik)</option>
-                                            {commSalesTeam.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                        </select>
-                                    </div>
-                                    <div className="comm-form-group">
-                                        <label className="comm-form-label">Deskripsi</label>
-                                        <textarea className="comm-input" rows={2} value={campaignForm.description} onChange={e => setCampaignForm(f => ({...f, description: e.target.value}))} placeholder="Keterangan tambahan (opsional)" style={{resize:'vertical'}} />
-                                    </div>
-                                    <div className="comm-row">
-                                        <div className="comm-form-group">
-                                            <label className="comm-form-label">Tanggal Mulai</label>
-                                            <input type="date" className="comm-input" value={campaignForm.startDate} onChange={e => setCampaignForm(f => ({...f, startDate: e.target.value}))} />
-                                        </div>
-                                        <div className="comm-form-group">
-                                            <label className="comm-form-label">Tanggal Berakhir</label>
-                                            <input type="date" className="comm-input" value={campaignForm.endDate} onChange={e => setCampaignForm(f => ({...f, endDate: e.target.value}))} />
-                                        </div>
-                                    </div>
-                                    <div className="comm-form-group" style={{display:'flex',gap:'1.5rem',flexWrap:'wrap'}}>
-                                        <label className="comm-checkbox-row">
-                                            <input type="checkbox" checked={campaignForm.isActive} onChange={e => setCampaignForm(f => ({...f, isActive: e.target.checked}))} />
-                                            <span style={{fontSize:'.83rem',color:'var(--text-main)'}}>Kampanye aktif</span>
-                                        </label>
-                                        <label className="comm-checkbox-row">
-                                            <input type="checkbox" checked={campaignForm.combineWithDefault} onChange={e => setCampaignForm(f => ({...f, combineWithDefault: e.target.checked}))} />
-                                            <span style={{fontSize:'.83rem',color:'var(--text-main)'}}>Gabungkan dengan komisi default</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <div>
-                                    <div className="comm-form-group">
-                                        <label className="comm-form-label">Pilih Produk untuk Kampanye</label>
-                                        <div className="comm-product-picker">
-                                            {commProducts.map(p => {
-                                                const selected = !!campaignForm.items.find(i => i.productId === p.id);
-                                                return (
-                                                    <div key={p.id} className={'comm-product-pick-row' + (selected ? ' selected' : '')} onClick={() => selected ? removeCampaignItem(p.id) : addCampaignItem(p.id, p.name)}>
-                                                        <span>{p.name} <span style={{fontSize:'.7rem',color:'var(--text-muted)'}}>{p.code}</span></span>
-                                                        {selected ? <CheckCircle2 size={15} color="#10b981" /> : <Plus size={14} color="var(--text-muted)" />}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                    {campaignForm.items.length > 0 && (
-                                        <div className="comm-form-group">
-                                            <label className="comm-form-label">Atur Nominal Komisi per Produk</label>
-                                            {campaignForm.items.map(item => (
-                                                <div key={item.productId} className="comm-item-row">
-                                                    <span className="comm-item-row-name">{item.productName}</span>
-                                                    <select className="comm-item-small-select" value={item.amountType} onChange={e => updateCampaignItem(item.productId, 'amountType', e.target.value)}>
-                                                        <option value="FLAT">Rp (Flat)</option>
-                                                        <option value="PERCENTAGE">Persen</option>
-                                                    </select>
-                                                    <input type="number" min="0" className="comm-item-small-input" value={item.amount} onChange={e => updateCampaignItem(item.productId, 'amount', e.target.value)} placeholder={item.amountType === 'FLAT' ? '50000' : '5'} />
-                                                    <button style={{background:'none',border:'none',cursor:'pointer',color:'#ef4444',padding:0,lineHeight:1}} onClick={() => removeCampaignItem(item.productId)}><X size={15} /></button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                    <div style={{display:'flex',gap:'.75rem',justifyContent:'flex-end',marginTop:'1rem',paddingTop:'1rem',borderTop:'1px solid var(--border-color)'}}>
-                                        <button className="comm-btn" onClick={() => setShowCampaignModal(false)}>Batal</button>
-                                        <button className="comm-btn primary" onClick={saveCampaign}>{editingCampaign ? 'Simpan Perubahan' : 'Buat Kampanye'}</button>
-                                    </div>
-                                </div>
-                            </div>
+                                                {/* Packaging sub-rows */}
+                                                {(p.packagings || []).map(pkg => {
+                                                    const pkgCfg = cfg.packagings?.[pkg.id] || { isActive: false, commissionType: 'CUMULATIVE' };
+                                                    return (
+                                                        <tr key={`pkg-${pkg.id}`} className="pkg-sub-row">
+                                                            <td style={{paddingLeft:'2rem', color:'var(--text-muted)', fontSize:'.78rem'}}>↳ {p.name}</td>
+                                                            <td><span className="sc-ro-badge-pkg">📦 {pkg.packagingName} ({pkg.unitsPerPackage} unit)</span></td>
+                                                            <td>
+                                                                {pkgCfg.isActive
+                                                                    ? <span className="sc-ro-badge-active">✓ Aktif</span>
+                                                                    : <span className="sc-ro-badge-inactive">✗ Nonaktif</span>
+                                                                }
+                                                            </td>
+                                                            <td><span className="sc-ro-badge-type">{pkgCfg.commissionType === 'CUMULATIVE' ? 'Kumulatif' : pkgCfg.commissionType === 'TIERED' ? 'Bertingkat' : pkgCfg.commissionType}</span></td>
+                                                            <td style={{textAlign:'center', color:'#6b7280', fontSize:'.75rem'}}>🔒 Read-only</td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
                     )}
                 </div>
@@ -2380,7 +2288,7 @@ const DashboardSubstokis = () => {
                                 <div className="mb-4">
                                     <label className="text-xs text-muted font-bold tracking-wider uppercase mb-1 block">Tentukan Role Operasional Pasukan</label>
                                     <div className="flex gap-2">
-                                        {['SALES', 'DRIVER'].map(r => (
+                                        {['DRIVER'].map(r => (
                                             <button key={r} onClick={() => setFormTeam({ ...formTeam, role: r })}
                                                 className="flex-1 rounded-md text-sm font-bold transition-colors"
                                                 style={{
@@ -2390,7 +2298,7 @@ const DashboardSubstokis = () => {
                                                     border: `1px solid ${formTeam.role === r ? 'var(--primary)' : 'var(--border-color)'}`
                                                 }}
                                             >
-                                                {r === 'SALES' ? 'Sales Eksternal' : 'Armada Driver'}
+                                                {'Armada Driver'}
                                             </button>
                                         ))}
                                     </div>
@@ -2480,11 +2388,13 @@ const DashboardSubstokis = () => {
                                                     value={tier.price} onChange={e => handleTierChange(index, 'price', e.target.value)} />
                                             </div>
                                             <div style={{ width: '135px' }}>
-                                                <div className="text-[10px] text-primary mb-1.5 uppercase font-bold tracking-tight h-[12px] flex items-center">
-                                                    {index === 0 ? 'Komisi (Rp)' : ''}
+                                                <div className="text-[10px] mb-1.5 uppercase font-bold tracking-tight h-[12px] flex items-center" style={{ color: '#f59e0b' }}>
+                                                    {index === 0 ? '🔒 Komisi (Rp)' : ''}
                                                 </div>
-                                                <input type="number" className="modal-input text-sm font-bold font-mono border-primary/20" placeholder="0"
-                                                    value={tier.commission} onChange={e => handleTierChange(index, 'commission', e.target.value)} />
+                                                <div className="modal-input text-sm font-bold font-mono" style={{ display: 'flex', alignItems: 'center', gap: '.4rem', background: 'rgba(245,158,11,.06)', border: '1.5px solid rgba(245,158,11,.2)', color: '#fbbf24', cursor: 'not-allowed', userSelect: 'none' }}>
+                                                    <span style={{ fontSize: '.65rem', opacity: .7 }}>🔒</span>
+                                                    {tier.commission || 0}
+                                                </div>
                                             </div>
                                             <div style={{ width: '38px' }}>
                                                 <div className="mb-1.5 h-[12px]"></div>
@@ -2502,7 +2412,7 @@ const DashboardSubstokis = () => {
                                 </div>
                                 <p className="text-[10px] text-muted mt-4 leading-relaxed italic">
                                     *) Harga jual adalah harga yang akan tertera di struk konsumen. <br />
-                                    *) Komisi Sales adalah hak yang didapatkan tenaga penjual Anda per unit barang yang terjual.
+                                    *) Komisi Sales <span style={{ color: '#f59e0b' }}>🔒 dikunci oleh Stokis Pusat</span> dan tidak dapat diubah di sini. Perubahan komisi berlaku otomatis sesuai setting Stokis.
                                 </p>
                             </div>
 
@@ -2540,14 +2450,14 @@ const DashboardSubstokis = () => {
                                             <li key={idx} className="flex justify-between items-center p-3 rounded-lg bg-[rgba(255,255,255,0.02)] border border-[var(--border-color)]">
                                                 <div>
                                                     <div className="font-bold text-sm tracking-wide">{item.name}</div>
-                                                    <div className="text-xs text-muted font-mono mt-1">{item.code} &bull; Harga PO: <span className="text-main">Rp {item.price.toLocaleString('id-ID')}</span></div>
+                                                    <div className="text-xs text-muted font-mono mt-1">{item.code} {item.packagingName ? `· 📦 ${item.packagingName}` : '· Satuan'} &bull; Harga PO: <span className="text-main">Rp {item.price.toLocaleString('id-ID')}</span></div>
                                                 </div>
                                                 <div className="flex items-center gap-4 text-right">
                                                     <div>
-                                                        <div className="text-[0.65rem] text-muted tracking-wide uppercase font-bold">Order Qty</div>
-                                                        <div className="font-mono mt-1 text-sm bg-[rgba(255,255,255,0.05)] px-2 py-0.5 rounded text-main">{item.quantity} Unit</div>
+                                                        <div className="text-[0.65rem] text-muted tracking-wide uppercase font-bold">Qty</div>
+                                                        <div className="font-mono mt-1 text-sm bg-[rgba(255,255,255,0.05)] px-2 py-0.5 rounded text-main">{item.quantity} {item.packagingName || 'unit'}</div>
                                                     </div>
-                                                    <button className="text-red-500 font-bold hover:text-red-400 p-2 ml-2 text-lg leading-none" onClick={() => removeFromCart(item.productId)}>&times;</button>
+                                                    <button className="text-red-500 font-bold hover:text-red-400 p-2 ml-2 text-lg leading-none" onClick={() => removeFromCart(item.cartKey)}>&times;</button>
                                                 </div>
                                             </li>
                                         ))}

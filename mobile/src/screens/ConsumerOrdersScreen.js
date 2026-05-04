@@ -13,7 +13,7 @@ import {
 import axios from 'axios';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const formatRp = (v) => `Rp ${v.toLocaleString('id-ID')}`;
+const formatRp = (v) => `Rp ${(v ?? 0).toLocaleString('id-ID')}`;
 
 const STATUS_CONFIG = {
     PENDING:    { label: 'Menunggu',  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  Icon: Clock },
@@ -61,6 +61,11 @@ export default function ConsumerOrdersScreen() {
                 </View>
                 <View style={styles.orderMid}>
                     <Text numberOfLines={1} style={styles.orderInvoice}>{item.invoice_id}</Text>
+                    {item.isKonsinyasi && (
+                        <View style={styles.konsinyasiBadge}>
+                            <Text style={styles.konsinyasiBadgeTxt}>🏷️ Konsinyasi</Text>
+                        </View>
+                    )}
                     <Text style={styles.orderDate}>{date}</Text>
                     <Text style={styles.orderItemsCount}>{item.items?.length || 0} produk</Text>
                 </View>
@@ -121,6 +126,11 @@ export default function ConsumerOrdersScreen() {
                                 <View style={styles.sheetHeaderLeft}>
                                     <Text style={styles.sheetTitle}>Detail Pesanan</Text>
                                     <Text style={styles.sheetSub}>{selected.invoice_id}</Text>
+                                    {selected.isKonsinyasi && (
+                                        <View style={[styles.konsinyasiBadge, { marginTop: 4 }]}>
+                                            <Text style={styles.konsinyasiBadgeTxt}>🏷️ Produk Konsinyasi (Titipan)</Text>
+                                        </View>
+                                    )}
                                 </View>
                                 <TouchableOpacity onPress={() => setSelected(null)} style={styles.closeBtn}>
                                     <X size={18} color={theme.colors.muted} />
@@ -151,28 +161,39 @@ export default function ConsumerOrdersScreen() {
                                 {/* Items */}
                                 <Text style={styles.sectionLabel}>Produk yang Dipesan</Text>
                                 <View style={styles.itemsBox}>
-                                    {(selected.items || []).map((item, idx) => (
+                                    {(selected.items || []).map((item, idx) => {
+                                        const isPkg = !!item.packagingId;
+                                        const pkgName = item.packagingName || item.packaging?.name || (isPkg ? 'Kemasan' : null);
+                                        const unitQty = item.unitQty || 1;
+                                        const totalUnits = item.quantity * unitQty;
+                                        return (
                                         <View key={idx} style={[
                                             styles.itemRow,
                                             idx > 0 && { borderTopWidth: 1, borderTopColor: theme.colors.border }
                                         ]}>
-                                            <View style={styles.itemIconWrap}>
-                                                <Package size={14} color={theme.colors.muted} />
+                                            <View style={[styles.itemIconWrap, isPkg && { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
+                                                <Package size={14} color={isPkg ? '#10b981' : theme.colors.muted} />
                                             </View>
                                             <View style={{ flex: 1 }}>
                                                 <Text numberOfLines={2} style={styles.itemName}>{item.product?.name || '-'}</Text>
+                                                {isPkg && (
+                                                    <View style={styles.itemPkgBadge}>
+                                                        <Text style={styles.itemPkgBadgeTxt}>📦 {pkgName} ({unitQty} unit/kemasan)</Text>
+                                                    </View>
+                                                )}
                                                 <Text style={styles.itemFormula}>
-                                                    {item.quantity} × {formatRp(item.price)}
+                                                    {item.quantity} {isPkg ? pkgName : 'unit'} × {formatRp(item.price)}
                                                 </Text>
                                             </View>
                                             <Text style={styles.itemTotal}>{formatRp(item.quantity * item.price)}</Text>
                                         </View>
-                                    ))}
+                                        );
+                                    })}
                                 </View>
 
                                 {/* Total */}
                                 <View style={styles.totalBox}>
-                                    <Text style={styles.totalLbl}>Total Pembayaran</Text>
+                                    <Text style={styles.totalLbl}>Total</Text>
                                     <Text style={styles.totalVal}>{formatRp(selected.total_amount)}</Text>
                                 </View>
                             </ScrollView>
@@ -216,6 +237,8 @@ const styles = StyleSheet.create({
     orderInvoice: { fontSize: 12, fontWeight: '700', color: theme.colors.primaryLight },
     orderDate: { fontSize: 11, color: theme.colors.muted, marginTop: 2 },
     orderItemsCount: { fontSize: 11, color: theme.colors.muted, marginTop: 1 },
+    konsinyasiBadge: { alignSelf: 'flex-start', marginTop: 3, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 20, backgroundColor: 'rgba(245,158,11,0.15)', borderWidth: 1, borderColor: 'rgba(245,158,11,0.35)' },
+    konsinyasiBadgeTxt: { fontSize: 10, fontWeight: '700', color: '#f59e0b' },
     orderRight: { alignItems: 'flex-end', gap: 4 },
     statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
     statusBadgeTxt: { fontSize: 10, fontWeight: '800' },
@@ -273,7 +296,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center', alignItems: 'center', flexShrink: 0,
     },
     itemName: { fontSize: 13, fontWeight: '700', color: theme.colors.text },
-    itemFormula: { fontSize: 11, color: theme.colors.muted, marginTop: 2 },
+    itemPkgBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(16,185,129,0.12)', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, marginTop: 3, marginBottom: 2 },
+    itemPkgBadgeTxt: { fontSize: 10, color: '#10b981', fontWeight: '800' },
+    itemUnitBadge: { fontSize: 10, color: theme.colors.muted, marginTop: 2, marginBottom: 2 },
+    itemFormula: { fontSize: 11, color: theme.colors.muted, marginTop: 1 },
     itemTotal: { fontSize: 13, fontWeight: '800', color: theme.colors.text, flexShrink: 0 },
 
     totalBox: {

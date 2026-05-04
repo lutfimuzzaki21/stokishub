@@ -17,15 +17,33 @@ import { LinearGradient } from 'expo-linear-gradient';
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2;
 
-const getPrice = (product, priceLevel) => {
-    if (product.userPriceTiers?.length > 0) return product.userPriceTiers[0].price;
+const getPrice = (product, priceLevel, packagingId = null) => {
+    // If a specific packaging is chosen, use the packaging's price tier
+    if (packagingId) {
+        const pkg = product.packagings?.find(p => p.id === packagingId);
+        if (pkg) {
+            // Use user-specific packaging tier override if set, else fall back to priceLevel
+            const tierOverride = pkg.userPackagingTiers?.[0];
+            const resolvedLevel = tierOverride ? tierOverride.level_name : priceLevel;
+            const pkgTier = pkg.priceTiers?.find(t => t.level_name === resolvedLevel)
+                || pkg.priceTiers?.find(t => t.level_name === 'Harga Umum')
+                || pkg.priceTiers?.[0];
+            if (pkgTier?.price != null) return pkgTier.price;
+        }
+    }
+    // Unit price
+    if (product.userPriceTiers?.length > 0) {
+        const levelName = product.userPriceTiers[0].level_name;
+        const tier = product.priceTiers?.find(t => t.level_name === levelName);
+        if (tier?.price != null) return tier.price;
+    }
     const tier = product.priceTiers?.find(t => t.level_name === priceLevel)
         || product.priceTiers?.find(t => t.level_name === 'Harga Umum')
         || product.priceTiers?.[0];
-    return tier?.price || 0;
+    return tier?.price ?? 0;
 };
 
-const formatRp = (v) => `Rp ${v.toLocaleString('id-ID')}`;
+const formatRp = (v) => `Rp ${(v ?? 0).toLocaleString('id-ID')}`;
 
 export default function ConsumerShopScreen() {
     const { user } = useAuth();
@@ -37,6 +55,7 @@ export default function ConsumerShopScreen() {
     const [search, setSearch] = useState('');
     const [detail, setDetail] = useState(null); // product shown in bottom sheet
     const [detailQty, setDetailQty] = useState(1);
+    const [detailPackagingId, setDetailPackagingId] = useState(null); // null = satuan unit
     const [addedId, setAddedId] = useState(null); // flash green feedback
 
     const stokisId = user.parent_id;
@@ -72,17 +91,35 @@ export default function ConsumerShopScreen() {
     const openDetail = (product) => {
         setDetail(product);
         setDetailQty(1);
+        // Auto-select default packaging if available
+        const defPkg = product.packagings?.find(p => p.isDefault);
+        setDetailPackagingId(defPkg ? defPkg.id : null);
     };
 
-    const handleAddToCart = (product, qty = 1) => {
-        const price = getPrice(product, priceLevel);
-        addItem({ productId: product.id, name: product.name, brand: product.brand, code: product.code, price, maxStock: product.stock, quantity: qty });
+    const handleAddToCart = (product, qty = 1, packagingId = null) => {
+        const pkg = packagingId ? product.packagings?.find(p => p.id === packagingId) : null;
+        const price = getPrice(product, priceLevel, packagingId);
+        const unitQty = pkg ? pkg.unitQty : 1;
+        // maxStock in terms of packaging units
+        const maxStock = pkg ? Math.floor(product.stock / unitQty) : product.stock;
+        addItem({
+            productId: product.id,
+            name: product.name,
+            brand: product.brand,
+            code: product.code,
+            price,
+            maxStock,
+            quantity: qty,
+            packagingId: packagingId || null,
+            packagingName: pkg ? pkg.name : null,
+            unitQty: unitQty,
+        });
         setAddedId(product.id);
         setTimeout(() => setAddedId(null), 1500);
         setDetail(null);
     };
 
-    const cartQtyForProduct = (productId) => items.find(i => i.productId === productId)?.quantity || 0;
+    const cartQtyForProduct = (productId) => items.find(i => i.productId === productId && !i.packagingId)?.quantity || 0;
 
     const renderProduct = ({ item }) => {
         const price = getPrice(item, priceLevel);
@@ -126,11 +163,20 @@ export default function ConsumerShopScreen() {
                     <Text style={[styles.productStock, outOfStock && { color: theme.colors.danger }]}>
                         Stok: {item.stock}
                     </Text>
+                    {item.packagings?.length > 0 && (
+                        <View style={styles.pkgBadge}>
+                            <Box size={9} color="#10b981" />
+                            <Text style={styles.pkgBadgeTxt}>{item.packagings.length} kemasan</Text>
+                        </View>
+                    )}
                 </View>
 
                 <TouchableOpacity
                     style={[styles.addBtn, outOfStock && styles.addBtnDisabled, isJustAdded && styles.addBtnSuccess]}
-                    onPress={() => !outOfStock && handleAddToCart(item)}
+                    onPress={() => {
+                        if (outOfStock) return;
+                        if (item.packagings?.length > 0) { openDetail(item); } else { handleAddToCart(item); }
+                    }}
                     disabled={outOfStock}
                     activeOpacity={0.8}
                 >
@@ -232,7 +278,7 @@ export default function ConsumerShopScreen() {
                                 <Text style={styles.sheetCode}>SKU: {detail.code}</Text>
 
                                 <View style={styles.sheetPriceRow}>
-                                    <Text style={styles.sheetPrice}>{formatRp(getPrice(detail, priceLevel))}</Text>
+                                    <Text style={styles.sheetPrice}>{formatRp(getPrice(detail, priceLevel, detailPackagingId))}</Text>
                                     <View style={[styles.stockChip, detail.stock === 0 && styles.stockChipEmpty]}>
                                         <Box size={12} color={detail.stock > 0 ? '#10b981' : theme.colors.danger} />
                                         <Text style={[styles.stockChipTxt, detail.stock === 0 && { color: theme.colors.danger }]}>
@@ -241,21 +287,64 @@ export default function ConsumerShopScreen() {
                                     </View>
                                 </View>
 
-                                {/* Price tiers info */}
-                                {detail.priceTiers?.length > 1 && (
-                                    <View style={styles.tierBox}>
-                                        <Text style={styles.tierTitle}>Tier Harga</Text>
-                                        {detail.priceTiers.map((t, i) => (
-                                            <View key={i} style={styles.tierRow}>
-                                                <View style={[styles.tierDot, t.level_name === priceLevel && { backgroundColor: theme.colors.primaryLight }]} />
-                                                <Text style={[styles.tierName, t.level_name === priceLevel && { color: theme.colors.primaryLight }]}>
-                                                    {t.level_name}
-                                                </Text>
-                                                <Text style={[styles.tierPrice, t.level_name === priceLevel && { color: theme.colors.primaryLight }]}>
-                                                    {formatRp(t.price)}
-                                                </Text>
+                                {/* Price tier info — hanya tampilkan tier yang berlaku */}
+                                {(() => {
+                                    const appliedLevelName = detail.userPriceTiers?.[0]?.level_name || priceLevel;
+                                    const appliedTier = detail.priceTiers?.find(t => t.level_name === appliedLevelName)
+                                        || detail.priceTiers?.find(t => t.level_name === 'Harga Umum')
+                                        || detail.priceTiers?.[0];
+                                    if (!appliedTier) return null;
+                                    return (
+                                        <View style={styles.tierBox}>
+                                            <Text style={styles.tierTitle}>Harga Per Unit</Text>
+                                            <View style={styles.tierRow}>
+                                                <View style={[styles.tierDot, { backgroundColor: theme.colors.primaryLight }]} />
+                                                <Text style={[styles.tierName, { color: theme.colors.primaryLight }]}>{appliedTier.level_name}</Text>
+                                                <Text style={[styles.tierPrice, { color: theme.colors.primaryLight }]}>{formatRp(appliedTier.price)}</Text>
                                             </View>
-                                        ))}
+                                        </View>
+                                    );
+                                })()}
+
+                                {/* Packaging selector */}
+                                {detail.packagings?.length > 0 && (
+                                    <View style={styles.packagingBox}>
+                                        <Text style={styles.tierTitle}>Satuan Pembelian</Text>
+                                        <View style={styles.packagingRow}>
+                                            {/* Unit option */}
+                                            <TouchableOpacity
+                                                style={[styles.packagingChip, detailPackagingId === null && styles.packagingChipActive]}
+                                                onPress={() => { setDetailPackagingId(null); setDetailQty(1); }}
+                                            >
+                                                <Text style={[styles.packagingChipTxt, detailPackagingId === null && styles.packagingChipTxtActive]}>Unit</Text>
+                                                <Text style={[styles.packagingChipSub, detailPackagingId === null && { color: theme.colors.primaryLight }]}>
+                                                    {formatRp(getPrice(detail, priceLevel, null))}
+                                                </Text>
+                                            </TouchableOpacity>
+                                            {detail.packagings.map(pkg => {
+                                                const tierOverride = pkg.userPackagingTiers?.[0];
+                                                const appliedTier = tierOverride ? tierOverride.level_name : null;
+                                                const pkgPrice = getPrice(detail, priceLevel, pkg.id);
+                                                const isSelected = detailPackagingId === pkg.id;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={pkg.id}
+                                                        style={[styles.packagingChip, isSelected && styles.packagingChipActive]}
+                                                        onPress={() => { setDetailPackagingId(pkg.id); setDetailQty(1); }}
+                                                    >
+                                                        <Text style={[styles.packagingChipTxt, isSelected && styles.packagingChipTxtActive]}>{pkg.name}</Text>
+                                                        {appliedTier && (
+                                                            <View style={styles.pkgTierBadge}>
+                                                                <Text style={styles.pkgTierBadgeTxt}>{appliedTier}</Text>
+                                                            </View>
+                                                        )}
+                                                        <Text style={[styles.packagingChipSub, isSelected && { color: theme.colors.primaryLight }]}>
+                                                            {pkg.unitQty} unit · {formatRp(pkgPrice)}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
                                     </View>
                                 )}
 
@@ -271,10 +360,15 @@ export default function ConsumerShopScreen() {
                                         </TouchableOpacity>
                                         <Text style={styles.qtyVal}>{detailQty}</Text>
                                         <TouchableOpacity
-                                            style={[styles.qtyBtn, detailQty >= detail.stock && styles.qtyBtnDisabled]}
-                                            onPress={() => setDetailQty(q => Math.min(detail.stock, q + 1))}
+                                            style={[styles.qtyBtn, detailQty >= (detailPackagingId ? Math.floor(detail.stock / (detail.packagings?.find(p=>p.id===detailPackagingId)?.unitQty||1)) : detail.stock) && styles.qtyBtnDisabled]}
+                                            onPress={() => {
+                                                const maxQty = detailPackagingId
+                                                    ? Math.floor(detail.stock / (detail.packagings?.find(p=>p.id===detailPackagingId)?.unitQty||1))
+                                                    : detail.stock;
+                                                setDetailQty(q => Math.min(maxQty, q + 1));
+                                            }}
                                         >
-                                            <Plus size={16} color={detailQty >= detail.stock ? theme.colors.muted : theme.colors.text} />
+                                            <Plus size={16} color={detailQty >= (detailPackagingId ? Math.floor(detail.stock / (detail.packagings?.find(p=>p.id===detailPackagingId)?.unitQty||1)) : detail.stock) ? theme.colors.muted : theme.colors.text} />
                                         </TouchableOpacity>
                                     </View>
                                 </View>
@@ -282,7 +376,7 @@ export default function ConsumerShopScreen() {
                                 <View style={styles.sheetSubtotalRow}>
                                     <Text style={styles.sheetSubtotalLbl}>Subtotal</Text>
                                     <Text style={styles.sheetSubtotalVal}>
-                                        {formatRp(getPrice(detail, priceLevel) * detailQty)}
+                                        {formatRp(getPrice(detail, priceLevel, detailPackagingId) * detailQty)}
                                     </Text>
                                 </View>
                             </ScrollView>
@@ -290,7 +384,7 @@ export default function ConsumerShopScreen() {
                             <View style={styles.sheetFooter}>
                                 <TouchableOpacity
                                     style={[styles.addToCartBtn, detail.stock === 0 && styles.addToCartBtnDisabled]}
-                                    onPress={() => handleAddToCart(detail, detailQty)}
+                                    onPress={() => handleAddToCart(detail, detailQty, detailPackagingId)}
                                     disabled={detail.stock === 0}
                                     activeOpacity={0.85}
                                 >
@@ -441,6 +535,30 @@ const styles = StyleSheet.create({
     tierDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.border },
     tierName: { flex: 1, fontSize: 13, color: theme.colors.muted, fontWeight: '600' },
     tierPrice: { fontSize: 13, fontWeight: '700', color: theme.colors.text },
+
+    packagingBox: {
+        backgroundColor: 'rgba(99,102,241,0.05)',
+        borderRadius: 12, borderWidth: 1, borderColor: 'rgba(99,102,241,0.15)',
+        padding: 14, marginBottom: 16,
+    },
+    packagingRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    packagingChip: {
+        paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
+        backgroundColor: 'rgba(255,255,255,0.04)',
+        borderWidth: 1.5, borderColor: theme.colors.border,
+        alignItems: 'center', minWidth: 80,
+    },
+    packagingChipActive: {
+        backgroundColor: 'rgba(99,102,241,0.12)',
+        borderColor: theme.colors.primaryLight,
+    },
+    packagingChipTxt: { fontSize: 13, fontWeight: '800', color: theme.colors.muted },
+    packagingChipTxtActive: { color: theme.colors.primaryLight },
+    packagingChipSub: { fontSize: 10, color: theme.colors.muted, marginTop: 2 },
+    pkgBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 },
+    pkgBadgeTxt: { fontSize: 9, color: '#10b981', fontWeight: '700' },
+    pkgTierBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(16,185,129,0.15)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, marginTop: 2, marginBottom: 1 },
+    pkgTierBadgeTxt: { fontSize: 9, color: '#10b981', fontWeight: '800' },
 
     qtyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
     qtyLabel: { fontSize: 14, fontWeight: '700', color: theme.colors.text },

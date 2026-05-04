@@ -6,6 +6,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import DriverNavigator from './src/navigation/DriverNavigator';
 import SalesNavigator from './src/navigation/SalesNavigator';
 import ConsumerNavigator from './src/navigation/ConsumerNavigator';
+import StokisNavigator from './src/navigation/StokisNavigator';
 import { ActivityIndicator, View, StatusBar } from 'react-native';
 import { theme } from './src/theme';
 
@@ -26,14 +27,16 @@ function Navigation() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       {!user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
+      ) : user.role === 'DRIVER' ? (
+        <Stack.Screen name="DriverMain" component={DriverNavigator} />
+      ) : user.role === 'SALES' ? (
+        <Stack.Screen name="SalesMain" component={SalesNavigator} />
+      ) : (user.role === 'STOKIS' || user.role === 'SUBSTOKIS') ? (
+        <Stack.Screen name="StokisMain" component={StokisNavigator} />
+      ) : (user.role === 'MEMBER' || user.role === 'KONSUMEN') ? (
+        <Stack.Screen name="ConsumerMain" component={ConsumerNavigator} />
       ) : (
-        <>
-          {user.role === 'DRIVER' && <Stack.Screen name="DriverMain" component={DriverNavigator} />}
-          {user.role === 'SALES' && <Stack.Screen name="SalesMain" component={SalesNavigator} />}
-          {(user.role === 'MEMBER' || user.role === 'KONSUMEN') && (
-            <Stack.Screen name="ConsumerMain" component={ConsumerNavigator} />
-          )}
-        </>
+        <Stack.Screen name="Login" component={LoginScreen} />
       )}
     </Stack.Navigator>
   );
